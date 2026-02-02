@@ -308,35 +308,42 @@ This is the most faithful path to reproducing Fig. 6 without re-deriving their e
 
 ---
 
-## 9. Suggested repository structure
+## 9. Repository structure
 
 ```
-
 .
-├── README.md
-├── pyproject.toml / requirements.txt
-├── src/
-│   ├── blocks/
-│   │   ├── block_engine_wrapper.py    # wrapper around external conformal-block library
-│   │   ├── derivatives.py             # computes ∂a^m ∂b^n at a=b=0, caches
-│   │   └── normalization_tests.py     # small tests to detect convention mismatches
-│   ├── spectrum/
-│   │   ├── discretization.py          # builds T1–T5 grids exactly as Table 2
-│   │   └── assumptions.py             # imposes scalar gaps for (ε) and (ε′)
-│   ├── lp/
-│   │   ├── build_lp.py                # constructs Ax ≥ b, equality constraint
-│   │   └── solve_lp.py                # solver interface, scaling, tolerances
-│   ├── scans/
-│   │   ├── scan_eps_bound.py          # Stage A (Fig. 3 boundary)
-│   │   └── scan_epsprime_bound.py     # Stage B (Fig. 6)
-│   └── plot/
-│       └── plot_fig6.py
-└── data/
-├── cached_block_derivatives/      # heavy cache
-├── eps_bound.csv                  # Δε_max(Δσ)
-└── epsprime_bound.csv             # Δε′_max(Δσ)
+├── README.md                        # This file (physics specification)
+├── CLAUDE.md                        # Instructions for Claude Code sessions
+├── Makefile                         # Dev commands (install, test, worktree)
+├── pyproject.toml                   # Package config (source of truth for deps)
+├── environment.yml                  # Conda environment
+├── requirements.lock                # Pinned dependencies for reproducibility
+│
+├── .claude/                         # Claude Code configuration
+│   ├── settings.json                # Shared settings (hooks, permissions)
+│   ├── agents/                      # Custom agents for code review
+│   └── hooks/                       # Shell scripts for notifications
+│
+├── docs/
+│   ├── DEVELOPMENT.md               # Parallel worktree workflow guide
+│   ├── CLUSTER_SETUP.md             # FASRC cluster deployment
+│   ├── RUN.md                       # Running scans and plotting
+│   └── ...
+│
+├── src/ising_bootstrap/
+│   ├── config.py                    # Physical constants, Table 2 params
+│   ├── blocks/                      # Conformal block computation
+│   ├── spectrum/                    # T1–T5 discretization
+│   ├── lp/                          # LP feasibility solver
+│   ├── scans/                       # Stage A and B bootstrap scans
+│   └── plot/                        # Figure generation
+│
+├── tests/                           # pytest test suite
+├── data/                            # Generated data (gitignored)
+└── figures/                         # Generated figures (gitignored)
+```
 
-````
+**Development workflow**: See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for parallel Claude worktree setup and code review process.
 
 ---
 
