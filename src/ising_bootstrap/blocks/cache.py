@@ -484,6 +484,8 @@ def precompute_extended_spectrum_blocks(
     skip_existing: bool = True,
     verbose: bool = True,
     workers: int = 1,
+    shard_id: Optional[int] = None,
+    num_shards: Optional[int] = None,
 ) -> int:
     """
     Precompute extended H arrays for all unique (Δ, l) pairs in the spectrum.
@@ -504,6 +506,10 @@ def precompute_extended_spectrum_blocks(
         If True, print progress.
     workers : int
         Number of parallel workers. Default 1 (serial).
+    shard_id : int, optional
+        If set with num_shards, only process operators where index % num_shards == shard_id.
+    num_shards : int, optional
+        Total number of shards for parallel job submission.
 
     Returns
     -------
@@ -533,6 +539,13 @@ def precompute_extended_spectrum_blocks(
     if verbose:
         print(f"  {total} unique operators, {skipped} already cached, "
               f"{n_todo} to compute")
+
+    # Shard support: split work across multiple jobs
+    if shard_id is not None and num_shards is not None:
+        to_compute = to_compute[shard_id::num_shards]
+        n_todo = len(to_compute)
+        if verbose:
+            print(f"  Shard {shard_id}/{num_shards}: {n_todo} operators for this shard")
 
     if n_todo == 0:
         if verbose:

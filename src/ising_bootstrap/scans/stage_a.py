@@ -80,6 +80,8 @@ class ScanConfig:
     precompute_only: bool = False
     scale: bool = True
     workers: int = 1
+    shard_id: Optional[int] = None
+    num_shards: Optional[int] = None
 
     def get_tables(self) -> List[DiscretizationTable]:
         """Return the discretization tables to use."""
@@ -486,6 +488,8 @@ def run_precompute(config: ScanConfig) -> None:
         skip_existing=True,
         verbose=config.verbose,
         workers=config.workers,
+        shard_id=config.shard_id,
+        num_shards=config.num_shards,
     )
 
     if config.verbose:
@@ -541,6 +545,14 @@ def main():
         "--workers", type=int, default=1,
         help="Number of parallel workers for precomputation (default: 1)"
     )
+    parser.add_argument(
+        "--shard-id", type=int, default=None,
+        help="Shard index for parallel precomputation (0-based)"
+    )
+    parser.add_argument(
+        "--num-shards", type=int, default=None,
+        help="Total number of shards for parallel precomputation"
+    )
 
     args = parser.parse_args()
 
@@ -555,6 +567,8 @@ def main():
         verbose=args.verbose,
         precompute_only=args.precompute_only,
         workers=args.workers,
+        shard_id=args.shard_id,
+        num_shards=args.num_shards,
     )
 
     if config.precompute_only:

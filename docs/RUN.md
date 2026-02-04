@@ -168,18 +168,77 @@ Qualitative checks:
 
 ---
 
-## Parallelization
+## SLURM Pipeline (FASRC Cannon)
 
-Grid points are independent, so the scans can be parallelized.
+The full pipeline runs unattended via SLURM dependency chains. Each step waits
+for the previous one to complete before starting.
 
-### Using Python multiprocessing
+### One-command submission
 
 ```bash
-python -m ising_bootstrap.scans.stage_a \
-    --sigma-min 0.50 --sigma-max 0.60 --sigma-step 0.002 \
-    --parallel --workers 4 \
-    --output data/eps_bound.csv
+# Submit everything with automatic dependencies:
+PRECOMPUTE=$(sbatch --parsable jobs/precompute_array.slurm)
+STAGE_A=$(sbatch --dependency=afterok:${PRECOMPUTE} --parsable jobs/stage_a.slurm)
+MERGE_A=$(sbatch --dependency=afterok:${STAGE_A} --parsable jobs/merge_stage_a_job.slurm)
+STAGE_B=$(sbatch --dependency=afterok:${MERGE_A} --parsable jobs/stage_b.slurm)
+FINAL=$(sbatch --dependency=afterok:${STAGE_B} --parsable jobs/final_merge_and_plot.slurm)
+
+echo "Pipeline submitted: $PRECOMPUTE -> $STAGE_A -> $MERGE_A -> $STAGE_B -> $FINAL"
 ```
+
+### Pipeline stages
+
+| Step | Job Script | Tasks | Time | Output |
+|------|-----------|-------|------|--------|
+| 1. Precompute | `jobs/precompute_array.slurm` | 5 shards x 8 CPUs | ~4h | `data/cached_blocks/ext_*.npy` |
+| 2. Stage A | `jobs/stage_a.slurm` | 51 array tasks | ~1h | `data/eps_bound_*.csv` |
+| 3. Merge A | `jobs/merge_stage_a_job.slurm` | 1 task | <1 min | `data/eps_bound.csv` |
+| 4. Stage B | `jobs/stage_b.slurm` | 51 array tasks | ~1h | `data/epsprime_bound_*.csv` |
+| 5. Final | `jobs/final_merge_and_plot.slurm` | 1 task | <1 min | `figures/fig6_reproduction.png` |
+
+Total wall time: ~6-7 hours (steps run sequentially via dependencies).
+
+### Monitoring
+
+```bash
+squeue -u $USER                          # Check queue status
+sacct -j <JOBID> --format=JobID,State    # Check completed job status
+tail -f logs/precompute_*_*.log          # Watch precompute progress
+ls data/cached_blocks/ | wc -l           # Count cached operators (target: 520476)
+```
+
+### Recovery
+
+If any step fails, resubmit from that point:
+```bash
+# Check which precompute shards need rerunning
+for i in 0 1 2 3 4; do echo "Shard $i: $(grep -c 'complete' logs/precompute_*_${i}.log 2>/dev/null || echo 'incomplete')"; done
+
+# Resubmit remaining pipeline from Stage A onward
+STAGE_A=$(sbatch --parsable jobs/stage_a.slurm)
+MERGE_A=$(sbatch --dependency=afterok:${STAGE_A} --parsable jobs/merge_stage_a_job.slurm)
+STAGE_B=$(sbatch --dependency=afterok:${MERGE_A} --parsable jobs/stage_b.slurm)
+FINAL=$(sbatch --dependency=afterok:${STAGE_B} --parsable jobs/final_merge_and_plot.slurm)
+```
+
+### SLURM scripts reference
+
+| Script | Purpose |
+|--------|---------|
+| `jobs/precompute_array.slurm` | 5-shard array job, precomputes 520K block derivatives |
+| `jobs/precompute.slurm` | Single-job precompute (24h, for non-sharded use) |
+| `jobs/stage_a.slurm` | 51-task array, one per Δσ point |
+| `jobs/merge_stage_a.sh` | Bash script to merge Stage A CSVs |
+| `jobs/merge_stage_a_job.slurm` | SLURM wrapper for merge_stage_a.sh (for dependency chains) |
+| `jobs/stage_b.slurm` | 51-task array, one per Δσ point |
+| `jobs/merge_stage_b.sh` | Bash script to merge Stage B CSVs |
+| `jobs/final_merge_and_plot.slurm` | Merges Stage B + generates Figure 6 |
+
+---
+
+## Parallelization (non-SLURM)
+
+Grid points are independent, so the scans can be parallelized on any machine.
 
 ### Manual splitting
 

@@ -2,8 +2,8 @@
 
 Tracking document for reproducing Figure 6 from arXiv:1203.6064.
 
-**Last updated:** 2026-02-03
-**Test suite:** 277/277 passing (37s)
+**Last updated:** 2026-02-04
+**Test suite:** 302/302 passing (~50s)
 
 ---
 
@@ -16,8 +16,8 @@ Tracking document for reproducing Figure 6 from arXiv:1203.6064.
 | 2 | Spectrum discretization | DONE | 933 | 733 | 88 |
 | 3 | LP builder & solver | DONE | 912 | 750 | 57 |
 | 4 | Stage A scan (Delta_epsilon) | DONE | 590 | 428 | 27 |
-| 5 | Stage B scan (Delta_epsilon') | NOT STARTED | 0 | 0 | 0 |
-| 6 | Plotting & validation | NOT STARTED | 6 (stub) | 0 | 0 |
+| 5 | Stage B scan (Delta_epsilon') | DONE | 456 | 510 | 25 |
+| 6 | Plotting & validation | DONE | ~207 | 0 | 0 |
 
 ---
 
@@ -497,7 +497,7 @@ the largest scalar gap (no scalars below Delta_epsilon) consistent with crossing
 ### Files
 | File | Lines | Description |
 |------|-------|-------------|
-| `src/ising_bootstrap/scans/__init__.py` | 30 | Public API exports |
+| `src/ising_bootstrap/scans/__init__.py` | 42 | Public API exports (Stage A + B) |
 | `src/ising_bootstrap/scans/stage_a.py` | 560 | Main scan loop, binary search, CSV output |
 | `src/ising_bootstrap/blocks/cache.py` | 613 | Extended H array cache functions added |
 
@@ -624,32 +624,175 @@ With Stage A complete, Stage B can now:
 
 ---
 
-## Milestone 5: Stage B Scan -- NOT STARTED
+## Milestone 5: Stage B Scan -- DONE
 
-### What needs to be built
-1. Load Stage A results (Delta_sigma, Delta_epsilon_max)
-2. For each point, fix Delta_epsilon gap and binary search Delta_epsilon'
-3. Output: CSV of (Delta_sigma, Delta_epsilon_max, Delta_epsilon_prime_max)
-4. This is Figure 6
+Implements the Stage B scan to compute the upper bound on Delta_epsilon' as a function
+of Delta_sigma. For each Delta_sigma value, fixes Delta_epsilon from Stage A and performs
+binary search to find the largest second scalar gap consistent with crossing symmetry.
+This produces the data for Figure 6 of the paper.
+
+### Files
+| File | Lines | Description |
+|------|-------|-------------|
+| `src/ising_bootstrap/scans/stage_b.py` | 456 | Two-gap scan, binary search, CSV output, CLI |
+| `src/ising_bootstrap/scans/__init__.py` | 42 | Updated public API exports (Stage A + B) |
+
+### Key Public API
+```python
+from ising_bootstrap.scans import (
+    StageBConfig,           # Configuration dataclass
+    find_eps_prime_bound,   # Two-gap binary search
+    run_scan_stage_b,       # Main scan loop
+    run_precompute_stage_b, # Block precomputation (delegates to Stage A)
+    load_stage_b_results,   # CSV loading (3-column format)
+    load_eps_bound_map,     # Stage A result loading
+)
+```
+
+### Implementation Highlights
+
+1. **Two-gap row subsetting**: `find_eps_prime_bound` selects rows from the full
+   constraint matrix using two gap conditions:
+   - Exclude scalars with Delta < Delta_epsilon (below first gap, always excluded)
+   - Exclude scalars with Delta_epsilon <= Delta < Delta_epsilon' (between gaps)
+   - Include scalars with Delta >= Delta_epsilon' (above second gap)
+   - Include all spinning operators unconditionally
+
+2. **Reuses Stage A infrastructure**: Imports `binary_search_eps`,
+   `build_full_constraint_matrix`, `load_h_cache_from_disk`, and
+   `load_scan_results` from `stage_a.py`. Only the row masking logic is new.
+
+3. **Stage A result loading**: `load_eps_bound_map` reads Stage A CSV and builds
+   a dict mapping Delta_sigma (rounded to 6 decimals) to Delta_epsilon_max.
+   Sigma grid points without Stage A data are skipped with a warning.
+
+4. **CSV output**: 3-column format for downstream plotting:
+   ```csv
+   delta_sigma,delta_eps,delta_eps_prime_max
+   0.500000,1.234000,3.456000
+   ...
+   ```
+
+5. **CLI**: `python -m ising_bootstrap.scans.stage_b --eps-bound <path> [options]`
+
+### Tests (25 passing)
+| File | Tests | Description |
+|------|-------|-------------|
+| `tests/test_scans/test_stage_b.py` | 25 | Two-gap filtering, CSV I/O, config, integration |
+
+### Test Details -- `tests/test_scans/test_stage_b.py`
+```
+PASSED  TestTwoGapFiltering::test_two_gaps_exclude_middle_scalars     Middle scalars excluded
+PASSED  TestTwoGapFiltering::test_no_second_gap_includes_all_above_eps  eps'=eps keeps all
+PASSED  TestTwoGapFiltering::test_very_large_second_gap_excludes_all  Large eps' removes all
+PASSED  TestTwoGapFiltering::test_spinning_always_included            Spinning unaffected
+PASSED  TestTwoGapFiltering::test_gap_boundary_precision              Boundary semantics correct
+PASSED  TestTwoGapFiltering::test_progressive_second_gap              Progressive gap monotonic
+
+PASSED  TestCSVIO::test_write_and_read_roundtrip                     CSV round-trip works
+PASSED  TestCSVIO::test_header_format                                3-column header correct
+PASSED  TestCSVIO::test_append_mode                                  Append mode works
+PASSED  TestCSVIO::test_empty_file                                   Empty file handling
+PASSED  TestCSVIO::test_three_column_values                          Values parsed correctly
+
+PASSED  TestStageBConfig::test_default_values                        Defaults from config.py
+PASSED  TestStageBConfig::test_sigma_grid_count                      Grid count formula
+PASSED  TestStageBConfig::test_custom_grid                           Custom grid generation
+PASSED  TestStageBConfig::test_reduced_tables                        Reduced discretization
+PASSED  TestStageBConfig::test_full_tables                           Full discretization
+PASSED  TestStageBConfig::test_eps_bound_path                        Path stored correctly
+
+PASSED  TestLoadEpsBoundMap::test_load_creates_mapping               Dict from CSV
+PASSED  TestLoadEpsBoundMap::test_empty_csv                          Empty dict from empty CSV
+PASSED  TestLoadEpsBoundMap::test_rounding_for_matching              Rounded keys for matching
+
+PASSED  TestRunScanValidation::test_missing_eps_bound_raises         ValueError if no path
+PASSED  TestRunScanValidation::test_skips_missing_sigma_points       Skips missing sigma points
+
+PASSED  TestStageBIntegration::test_single_sigma_runs           [slow] Single point scan completes
+PASSED  TestStageBIntegration::test_scan_three_points           [slow] Multi-point scan works
+PASSED  TestStageBIntegration::test_csv_round_trip_through_pipeline [slow] Full pipeline CSV roundtrip
+```
+
+### Design Decisions
+
+1. **Same binary search direction as Stage A**: Larger Delta_epsilon' removes more
+   scalars from constraints, making LP easier to satisfy (excluded). If excluded:
+   gap too large, lower hi. If allowed: gap consistent, raise lo.
+
+2. **Search range**: lo = Delta_epsilon (just above first gap), hi = 6.0 (generous
+   upper bound). At the Ising point, expected result is ~3.84.
+
+3. **Delegates precomputation**: `run_precompute` creates a `ScanConfig` and calls
+   Stage A's precompute function since blocks are scan-stage-independent.
+
+4. **Crash recovery**: CSV rows are written immediately after each sigma point,
+   so partial results are preserved if the job is interrupted.
 
 ---
 
-## Milestone 6: Plotting & Validation -- NOT STARTED
+## Milestone 6: Plotting & Validation -- DONE
 
-### What needs to be built
-1. Load Stage B CSV
-2. Plot Delta_epsilon' vs Delta_sigma (Figure 6)
-3. Validate: sharp spike at Delta_sigma ~ 0.5182 with Delta_epsilon' ~ 3.84
-4. Export PDF/PNG
+Implements the plotting module to reproduce Figure 6 from arXiv:1203.6064.
+Loads Stage B CSV results and generates the upper bound on Delta_epsilon' vs
+Delta_sigma, with optional sanity check output.
 
-### Stub file
-`src/ising_bootstrap/plot/__init__.py` (6 lines, empty)
+### Files
+| File | Lines | Description |
+|------|-------|-------------|
+| `src/ising_bootstrap/plot/fig6.py` | ~207 | Figure 6 generation, sanity check, CLI |
+| `src/ising_bootstrap/plot/__init__.py` | updated | Exports `plot_fig6`, `print_sanity_check` |
+
+### SLURM Infrastructure
+| File | Description |
+|------|-------------|
+| `jobs/stage_b.slurm` | SLURM array job for Stage B scan (mirrors stage_a.slurm) |
+| `jobs/merge_stage_b.sh` | Merge script for Stage B per-task CSVs |
+| `jobs/precompute.slurm` | Time limit fixed: 6h to 24h (precompute needs ~18h) |
+
+### Key Public API
+```python
+from ising_bootstrap.plot import (
+    plot_fig6,            # Generate Figure 6: (data, output, dpi, show) -> Figure
+    print_sanity_check,   # Print validation summary: (data) -> None
+)
+```
+
+### CLI
+```bash
+# Via module
+python -m ising_bootstrap.plot.fig6 --data <path> --output <path> --dpi 300 --show --no-sanity-check
+
+# Via entry point (registered in pyproject.toml)
+ising-plot --data <path> --output <path> --dpi 300 --show --no-sanity-check
+```
+
+### Design Decisions
+
+1. **Agg backend for headless cluster**: Uses `matplotlib.use("Agg")` at import time
+   so that the module works on headless SLURM nodes without an X display. The `--show`
+   flag switches to an interactive backend if requested.
+
+2. **Auto-save PDF sibling**: When saving a PNG, the module automatically saves a
+   PDF version alongside it (e.g., `fig6.png` + `fig6.pdf`) for publication quality.
+
+3. **Reuses `load_stage_b_results()`**: Delegates CSV parsing to the existing
+   `ising_bootstrap.scans.stage_b.load_stage_b_results` function rather than
+   reimplementing CSV loading.
+
+### Tests (0 new tests)
+
+No new tests were added for the plotting module. Verification was performed manually:
+- Imports work (`from ising_bootstrap.plot import plot_fig6`)
+- CLI help works (`python -m ising_bootstrap.plot.fig6 --help`)
+- Synthetic test plot generates both PNG and PDF
+- All 302 existing tests still pass
 
 ---
 
 ## File Inventory
 
-### Source Code (4,974 lines)
+### Source Code (~5,643 lines)
 
 ```
 src/ising_bootstrap/
@@ -678,13 +821,16 @@ src/ising_bootstrap/
     solver.py                        302 lines   LP feasibility (HiGHS)
 
   scans/
-    __init__.py                       30 lines   Public API exports
-    stage_a.py                       560 lines   Binary search, CSV output
+    __init__.py                       42 lines   Public API exports (Stage A + B)
+    stage_a.py                       560 lines   Stage A: binary search, CSV output
+    stage_b.py                       456 lines   Stage B: two-gap scan, CSV output
 
-  plot/__init__.py                     6 lines   STUB
+  plot/
+    __init__.py                      updated    Exports plot_fig6, print_sanity_check
+    fig6.py                         ~207 lines  Figure 6 generation + CLI
 ```
 
-### Test Code (3,220 lines)
+### Test Code (3,730 lines)
 
 ```
 tests/
@@ -710,6 +856,7 @@ tests/
   test_scans/
     __init__.py                        1 line
     test_stage_a.py                  427 lines   27 tests (24 fast + 3 slow)
+    test_stage_b.py                  510 lines   25 tests (22 fast + 3 slow)
 ```
 
 ---
@@ -720,7 +867,7 @@ tests/
    Computation uses mpmath with 50-digit precision. The LP solver only
    needs float64, so this is acceptable.
 
-2. **Slow tests**: 7 tests marked `@pytest.mark.slow` compute full derivative
+2. **Slow tests**: 10 tests marked `@pytest.mark.slow` compute full derivative
    sets or run the end-to-end pipeline on coarse spectra. Currently run by
    default (~2-12s each).
 

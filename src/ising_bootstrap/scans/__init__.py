@@ -16,6 +16,15 @@ from .stage_a import (
     load_scan_results,
 )
 
+from .stage_b import (
+    StageBConfig,
+    find_eps_prime_bound,
+    run_scan as run_scan_stage_b,
+    run_precompute as run_precompute_stage_b,
+    load_stage_b_results,
+    load_eps_bound_map,
+)
+
 __all__ = [
     "ScanConfig",
     "binary_search_eps",
@@ -24,4 +33,10 @@ __all__ = [
     "run_scan",
     "run_precompute",
     "load_scan_results",
+    "StageBConfig",
+    "find_eps_prime_bound",
+    "run_scan_stage_b",
+    "run_precompute_stage_b",
+    "load_stage_b_results",
+    "load_eps_bound_map",
 ]

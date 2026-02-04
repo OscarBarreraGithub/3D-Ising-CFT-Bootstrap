@@ -50,11 +50,41 @@ print('Imports OK')
 "
 echo ""
 
-# --- Test 2: Reduced 3-point scan ---
-echo "--- Test 2: Reduced 3-point scan ---"
-python -m ising_bootstrap.scans.stage_a \
-    --sigma-min 0.51 --sigma-max 0.53 --sigma-step 0.01 \
-    --reduced --verbose --output data/eps_bound_quick_test.csv
+# --- Test 2: Pipeline sanity check with coarse discretization ---
+# Uses coarse tables (~219 operators) with n_max=2 to verify the full
+# pipeline (blocks -> crossing -> LP -> binary search -> CSV) runs.
+# This does NOT produce physics-quality results — that requires the
+# full discretization with precomputed block cache.
+echo "--- Test 2: Pipeline sanity check (coarse tables, n_max=2) ---"
+python -c "
+from pathlib import Path
+from ising_bootstrap.config import DiscretizationTable
+from ising_bootstrap.scans.stage_a import ScanConfig, run_scan
+
+# Coarse tables matching integration test setup (~219 operators)
+t1 = DiscretizationTable('T1_test', delta=0.1, delta_max=3, l_max=0)
+t2 = DiscretizationTable('T2_test', delta=0.2, delta_max=8, l_max=6)
+
+config = ScanConfig(
+    sigma_min=0.51,
+    sigma_max=0.53,
+    sigma_step=0.01,
+    tolerance=0.01,
+    max_iter=30,
+    n_max=2,
+    tables=[t1, t2],
+    output=Path('data/eps_bound_quick_test.csv'),
+    verbose=True,
+)
+results = run_scan(config)
+
+# Validate results
+assert len(results) == 3, f'Expected 3 results, got {len(results)}'
+for ds, de in results:
+    assert 0.5 <= de <= 2.5, f'Unexpected eps_max={de} at sigma={ds}'
+print()
+print('Pipeline validation passed: 3 points computed successfully')
+"
 
 echo ""
 echo "--- Results ---"

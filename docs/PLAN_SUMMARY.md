@@ -34,13 +34,13 @@ Rationale:
 
 | # | Milestone | Key Deliverable | Status |
 |---|-----------|-----------------|--------|
-| 0 | Scaffolding | pyproject.toml, package structure | ☐ |
-| 1 | Block Engine | G_{Δ,l}(z) at z=z̄=1/2 with derivatives | ☐ |
-| 2 | Discretization | Table 2 (T1-T5), index set (66 terms) | ☐ |
-| 3 | LP Builder | Constraint matrix, HiGHS wrapper | ☐ |
-| 4 | Stage A | Δε_max(Δσ) scan with binary search | ☐ |
-| 5 | Stage B | Δε'_max(Δσ) scan with two-gap assumption | ☐ |
-| 6 | Plotting | Figure matching paper's Fig. 6 | ☐ |
+| 0 | Scaffolding | pyproject.toml, package structure | ✓ |
+| 1 | Block Engine | G_{Δ,l}(z) at z=z̄=1/2 with derivatives | ✓ |
+| 2 | Discretization | Table 2 (T1-T5), index set (66 terms) | ✓ |
+| 3 | LP Builder | Constraint matrix, HiGHS wrapper | ✓ |
+| 4 | Stage A | Δε_max(Δσ) scan with binary search | ✓ |
+| 5 | Stage B | Δε'_max(Δσ) scan with two-gap assumption | ✓ |
+| 6 | Plotting | Figure matching paper's Fig. 6 | ✓ |
 
 See [docs/TODO.md](TODO.md) for detailed task lists.
 
@@ -151,15 +151,15 @@ If no such α → spectrum ALLOWED (cannot be ruled out)
 │   ├── implementation_choices.md # Block strategy ✓
 │   ├── RUN.md                   # Run instructions ✓
 │   └── PLAN_SUMMARY.md          # This file ✓
-├── src/ising_bootstrap/         # Main package [TO CREATE]
+├── src/ising_bootstrap/         # Main package
 │   ├── config.py                # Constants
 │   ├── blocks/                  # Block computation
 │   ├── spectrum/                # Discretization
 │   ├── lp/                      # LP solver
-│   ├── scans/                   # Stage A & B
-│   └── plot/                    # Plotting
-├── tests/                       # Unit & integration tests [TO CREATE]
-├── data/                        # Output data [TO CREATE]
+│   ├── scans/                   # Stage A & B (both implemented)
+│   └── plot/                    # Plotting (fig6.py)
+├── tests/                       # 302 tests (277 Stage A + 25 Stage B)
+├── data/                        # Output data
 └── figures/                     # Generated figures [TO CREATE]
 ```
 
