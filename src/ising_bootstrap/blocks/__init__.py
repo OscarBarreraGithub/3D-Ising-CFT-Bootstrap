@@ -65,6 +65,11 @@ from .cache import (
     cache_exists,
     cache_stats,
     clear_cache,
+    # Extended H array cache (for LP)
+    extended_cache_exists,
+    save_extended_h_array,
+    load_extended_h_array,
+    precompute_extended_spectrum_blocks,
 )
 
 
@@ -103,4 +108,9 @@ __all__ = [
     "cache_exists",
     "cache_stats",
     "clear_cache",
+    # Extended H array cache
+    "extended_cache_exists",
+    "save_extended_h_array",
+    "load_extended_h_array",
+    "precompute_extended_spectrum_blocks",
 ]

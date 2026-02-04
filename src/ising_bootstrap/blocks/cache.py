@@ -314,6 +314,210 @@ def precompute_spectrum_blocks(spectrum_points: List[Tuple[float, int]],
     return computed
 
 
+# =============================================================================
+# Extended H array cache (for LP constraint matrix assembly)
+# =============================================================================
+#
+# The LP module needs the full 2D H[p,q] array with both odd and even p,
+# not just the 66 odd-m values from the standard index set. We cache these
+# separately as .npy files to avoid recomputing during scans.
+
+
+def get_extended_cache_filename(delta: float, spin: int) -> Path:
+    """
+    Generate the cache filename for an extended H array.
+
+    Format: ext_d{delta:.8f}_l{spin}.npy
+    Uses 8 decimal places (T1 has δ=2e-5, needs 5+ decimals).
+
+    Parameters
+    ----------
+    delta : float
+        The scaling dimension Δ.
+    spin : int
+        The spin l.
+
+    Returns
+    -------
+    Path
+        Full path to the cache file.
+    """
+    filename = f"ext_d{delta:.8f}_l{spin}.npy"
+    return CACHE_DIR / filename
+
+
+def extended_cache_exists(delta: float, spin: int) -> bool:
+    """Check if extended H array cache file exists."""
+    return get_extended_cache_filename(delta, spin).exists()
+
+
+def save_extended_h_array(delta: float, spin: int,
+                          H: np.ndarray, n_max: int = N_MAX,
+                          overwrite: bool = False) -> Path:
+    """
+    Save an extended H array to disk cache.
+
+    Parameters
+    ----------
+    delta : float
+        The scaling dimension Δ.
+    spin : int
+        The spin l.
+    H : np.ndarray
+        2D array of shape (max_order+1, max_k+1) with H[p,q] = h_{p,q}.
+    n_max : int
+        The truncation parameter.
+    overwrite : bool
+        If True, overwrite existing file.
+
+    Returns
+    -------
+    Path
+        Path to the saved file.
+    """
+    cache_path = get_extended_cache_filename(delta, spin)
+
+    if cache_path.exists() and not overwrite:
+        raise FileExistsError(f"Extended cache file already exists: {cache_path}")
+
+    max_order = 2 * n_max + 1
+    max_k = max_order // 2
+    expected_shape = (max_order + 1, max_k + 1)
+    if H.shape != expected_shape:
+        raise ValueError(
+            f"H array shape {H.shape} doesn't match expected {expected_shape} "
+            f"for n_max={n_max}"
+        )
+
+    np.save(cache_path, H)
+    return cache_path
+
+
+def load_extended_h_array(delta: float, spin: int,
+                          n_max: int = N_MAX) -> np.ndarray:
+    """
+    Load an extended H array from disk cache.
+
+    Parameters
+    ----------
+    delta : float
+        The scaling dimension Δ.
+    spin : int
+        The spin l.
+    n_max : int
+        Expected truncation parameter.
+
+    Returns
+    -------
+    np.ndarray
+        2D array of shape (max_order+1, max_k+1).
+
+    Raises
+    ------
+    FileNotFoundError
+        If cache file doesn't exist.
+    ValueError
+        If cached array shape doesn't match expected.
+    """
+    cache_path = get_extended_cache_filename(delta, spin)
+
+    if not cache_path.exists():
+        raise FileNotFoundError(f"Extended cache file not found: {cache_path}")
+
+    H = np.load(cache_path)
+
+    max_order = 2 * n_max + 1
+    max_k = max_order // 2
+    expected_shape = (max_order + 1, max_k + 1)
+    if H.shape != expected_shape:
+        raise ValueError(
+            f"Cached H shape {H.shape} doesn't match expected {expected_shape} "
+            f"for n_max={n_max}"
+        )
+
+    return H
+
+
+def precompute_extended_spectrum_blocks(
+    spectrum_points: List[Tuple[float, int]],
+    n_max: int = N_MAX,
+    skip_existing: bool = True,
+    verbose: bool = True,
+) -> int:
+    """
+    Precompute extended H arrays for all unique (Δ, l) pairs in the spectrum.
+
+    The extended H array contains h_{p,q} for ALL p (odd and even) with
+    p + 2q ≤ 2*n_max + 1. This is needed by the LP crossing derivative
+    computation (Leibniz rule).
+
+    Parameters
+    ----------
+    spectrum_points : list of (float, int)
+        List of (Δ, l) pairs to compute.
+    n_max : int
+        The truncation parameter.
+    skip_existing : bool
+        If True, skip points that are already cached.
+    verbose : bool
+        If True, print progress.
+
+    Returns
+    -------
+    int
+        Number of blocks computed (excluding skipped).
+    """
+    from .coordinate_transform import compute_h_m0_from_block_derivs
+    from .transverse_derivs import compute_all_h_mn
+
+    max_order = 2 * n_max + 1
+    max_k = max_order // 2
+
+    # Deduplicate
+    unique_ops = sorted(set(
+        (round(d, 8), s) for d, s in spectrum_points
+    ))
+
+    total = len(unique_ops)
+    computed = 0
+    skipped = 0
+    errors = 0
+
+    for i, (delta, spin) in enumerate(unique_ops):
+        if verbose and (i % 500 == 0 or i == total - 1):
+            print(f"  [{i+1}/{total}] (Δ={delta:.6f}, l={spin})"
+                  f"  computed={computed} skipped={skipped} errors={errors}")
+
+        if skip_existing and extended_cache_exists(delta, spin):
+            skipped += 1
+            continue
+
+        try:
+            h_m0 = compute_h_m0_from_block_derivs(
+                mpf(delta), spin, max_order + 4
+            )
+            h_all = compute_all_h_mn(delta, spin, h_m0, n_max)
+
+            H = np.zeros((max_order + 1, max_k + 1), dtype=np.float64)
+            for p in range(max_order + 1):
+                for q in range(max_k + 1):
+                    if p + 2 * q <= max_order and (p, q) in h_all:
+                        H[p, q] = float(h_all[(p, q)])
+
+            save_extended_h_array(delta, spin, H, n_max, overwrite=True)
+            computed += 1
+        except (ZeroDivisionError, ValueError, Exception) as e:
+            errors += 1
+            if verbose:
+                print(f"    ERROR at (Δ={delta}, l={spin}): {e}")
+
+    if verbose:
+        print(f"  Done: {computed} computed, {skipped} skipped, {errors} errors"
+              f" (out of {total} unique operators)")
+
+    return computed
+
+
 def clear_cache(confirm: bool = False) -> int:
     """
     Delete all cache files.
@@ -333,6 +537,9 @@ def clear_cache(confirm: bool = False) -> int:
 
     count = 0
     for cache_file in CACHE_DIR.glob("*.npz"):
+        cache_file.unlink()
+        count += 1
+    for cache_file in CACHE_DIR.glob("ext_*.npy"):
         cache_file.unlink()
         count += 1
 

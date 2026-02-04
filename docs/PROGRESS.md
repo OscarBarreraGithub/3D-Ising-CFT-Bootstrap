@@ -3,7 +3,7 @@
 Tracking document for reproducing Figure 6 from arXiv:1203.6064.
 
 **Last updated:** 2026-02-03
-**Test suite:** 250/250 passing (20s)
+**Test suite:** 277/277 passing (37s)
 
 ---
 
@@ -15,7 +15,7 @@ Tracking document for reproducing Figure 6 from arXiv:1203.6064.
 | 1 | Conformal block engine | DONE | 2,306 | 1,128 | 84 |
 | 2 | Spectrum discretization | DONE | 933 | 733 | 88 |
 | 3 | LP builder & solver | DONE | 912 | 750 | 57 |
-| 4 | Stage A scan (Delta_epsilon) | NOT STARTED | 7 (stub) | 0 | 0 |
+| 4 | Stage A scan (Delta_epsilon) | DONE | 590 | 428 | 27 |
 | 5 | Stage B scan (Delta_epsilon') | NOT STARTED | 0 | 0 | 0 |
 | 6 | Plotting & validation | NOT STARTED | 6 (stub) | 0 | 0 |
 
@@ -488,16 +488,139 @@ exercising the full pipeline. As a consequence:
 
 ---
 
-## Milestone 4: Stage A Scan -- NOT STARTED
+## Milestone 4: Stage A Scan -- DONE
 
-### What needs to be built
-1. Grid over Delta_sigma in [0.5, 0.6] with step ~0.002
-2. For each Delta_sigma, binary search on Delta_epsilon gap
-3. Build spectrum with gap, compute constraint matrix, check LP feasibility
-4. Output: CSV of (Delta_sigma, Delta_epsilon_max)
+Implements the Stage A scan to compute the upper bound on Delta_epsilon as a function
+of Delta_sigma. For each Delta_sigma value on a grid, performs binary search to find
+the largest scalar gap (no scalars below Delta_epsilon) consistent with crossing symmetry.
 
-### Stub file
-`src/ising_bootstrap/scans/__init__.py` (7 lines, empty)
+### Files
+| File | Lines | Description |
+|------|-------|-------------|
+| `src/ising_bootstrap/scans/__init__.py` | 30 | Public API exports |
+| `src/ising_bootstrap/scans/stage_a.py` | 560 | Main scan loop, binary search, CSV output |
+| `src/ising_bootstrap/blocks/cache.py` | 613 | Extended H array cache functions added |
+
+### Key Public API
+```python
+from ising_bootstrap.scans import (
+    ScanConfig,              # Configuration dataclass
+    run_scan,                # Main scan loop
+    run_precompute,          # Block precomputation
+    binary_search_eps,       # Generic binary search (decoupled from LP)
+    find_eps_bound,          # Row-subsetting binary search
+    load_scan_results,       # CSV loading
+)
+```
+
+### Implementation Highlights
+
+1. **Binary search correction**: Fixed bug in `docs/TODO.md` pseudocode:
+   - **Correct**: `if excluded: hi = mid` (LP feasible → gap inconsistent → too high)
+   - **Incorrect**: `if is_feasible: lo = mid` (would maximize excluded region)
+   - Logic: Larger gap removes more scalars → makes LP easier to satisfy → more likely excluded
+
+2. **Extended H array cache**: Block derivatives h_{m,n}(Delta,l) are Delta_sigma-independent:
+   - Precompute once for all unique (Delta, l) pairs in discretization
+   - Save separately as `ext_*.npy` files (22,11) arrays
+   - Reuse for all 51 Delta_sigma grid points
+   - Avoids 1000+ redundant block computations per scan
+
+3. **Full constraint matrix approach**: Build A matrix (N_ops × 66) once per Delta_sigma:
+   - Binary search selects row subsets via numpy boolean masking
+   - No matrix rebuilding per iteration
+   - Significant speedup over naive approach
+
+4. **CSV output**: Standard format for stage handoff:
+   ```csv
+   delta_sigma,delta_eps_max
+   0.500,1.234
+   0.502,1.238
+   ...
+   ```
+
+### Tests (27 passing)
+| File | Tests | Description |
+|------|-------|-------------|
+| `tests/test_scans/test_stage_a.py` | 27 | Binary search, gap filtering, CSV I/O, integration |
+
+### Test Details -- `tests/test_scans/test_stage_a.py`
+```
+PASSED  TestBinarySearchLogic::test_basic_search              Finds correct bound
+PASSED  TestBinarySearchLogic::test_all_feasible              Returns lo (hi bound)
+PASSED  TestBinarySearchLogic::test_all_infeasible            Returns lo (unitarity)
+PASSED  TestBinarySearchLogic::test_tolerance_convergence     Stops within tolerance
+PASSED  TestBinarySearchLogic::test_callable_predicate        Generic predicate works
+PASSED  TestBinarySearchLogic::test_max_iterations_respected  Iteration limit enforced
+PASSED  TestBinarySearchLogic::test_narrow_range              Small range handled
+PASSED  TestBinarySearchLogic::test_different_thresholds      Multiple thresholds tested
+
+PASSED  TestGapFiltering::test_no_gap_includes_all            Gap=0.5 keeps all
+PASSED  TestGapFiltering::test_large_gap_excludes_all_scalars Gap > Dmax removes all
+PASSED  TestGapFiltering::test_gap_preserves_spinning         Spinning unaffected
+PASSED  TestGapFiltering::test_gap_boundary_inclusion         Boundary semantics correct
+PASSED  TestGapFiltering::test_progressive_gap                Progressive gap values
+
+PASSED  TestCSVIO::test_write_and_read_roundtrip              CSV round-trip works
+PASSED  TestCSVIO::test_header_format                         Header format correct
+PASSED  TestCSVIO::test_append_mode                           Append mode works
+PASSED  TestCSVIO::test_empty_file                            Empty file handling
+
+PASSED  TestScanConfig::test_default_values                   Defaults correct
+PASSED  TestScanConfig::test_sigma_grid_count                 Grid count formula
+PASSED  TestScanConfig::test_custom_grid                      Custom grid generation
+PASSED  TestScanConfig::test_reduced_tables                   Reduced discretization
+PASSED  TestScanConfig::test_full_tables                      Full discretization
+
+PASSED  TestExtendedCache::test_save_and_load_roundtrip       Extended H array cache
+PASSED  TestExtendedCache::test_shape_validation              (22,11) shape enforced
+
+PASSED  TestStageAIntegration::test_single_sigma_runs    [slow] Single Δσ scan completes
+PASSED  TestStageAIntegration::test_single_sigma_plausible [slow] Result in plausible range
+PASSED  TestStageAIntegration::test_scan_three_points    [slow] Multi-point scan works
+```
+
+### Design Decisions
+
+1. **Decoupled binary search**: `binary_search_eps` is a pure function taking a
+   predicate, making it independently testable without LP dependency.
+
+2. **Row subsetting approach**: `find_eps_bound` builds the full A matrix once,
+   then creates boolean masks to select scalar/spinning rows per iteration.
+   This is much faster than rebuilding the matrix each time.
+
+3. **Extended cache format**: Existing cache stores 66-element vectors (odd m only).
+   Extended cache stores full (22,11) arrays with both odd and even m derivatives,
+   which is what `compute_crossing_vector_fast` needs.
+
+4. **Coarse discretization in tests**: Integration tests use custom tables with
+   step 0.1 (scalars) / 0.2 (spinning) to keep runtime under 10s. Production
+   scans use the fine Table 2 discretization.
+
+### Known Issues & Nuances
+
+1. **Binary search direction**: The pseudocode in `docs/TODO.md` (lines 283-289) had
+   the binary search direction reversed. Corrected logic:
+   - Larger gap → fewer constraints → LP more likely feasible (excluded)
+   - If excluded: gap is too large → `hi = mid`
+   - If allowed: gap is consistent → `lo = mid`
+
+2. **Precomputation time**: Extended H array precomputation for full discretization
+   (Tables T1-T5, ~201k operators, ~57k unique (Delta,l) pairs) takes several hours
+   with n_max=10. Once cached, scans are much faster.
+
+3. **Memory usage**: Full constraint matrix A is (N_ops × 66). For production scans
+   with ~201k operators, this is ~100 MB per Delta_sigma. Manageable on modern hardware.
+
+4. **LP tolerance**: Uses `config.LP_TOLERANCE` for feasibility checks. Default 1e-9
+   works well for production runs.
+
+### Next Steps → Milestone 5
+
+With Stage A complete, Stage B can now:
+1. Load the Delta_epsilon_max(Delta_sigma) curve from CSV
+2. For each Delta_sigma, fix Delta_epsilon gap and binary search Delta_epsilon'
+3. Output the final (Delta_sigma, Delta_epsilon', Delta_epsilon'_max) for Figure 6
 
 ---
 
@@ -526,7 +649,7 @@ exercising the full pipeline. As a consequence:
 
 ## File Inventory
 
-### Source Code (4,384 lines)
+### Source Code (4,974 lines)
 
 ```
 src/ising_bootstrap/
@@ -534,13 +657,13 @@ src/ising_bootstrap/
   config.py                          201 lines
 
   blocks/
-    __init__.py                      106 lines
+    __init__.py                      116 lines   Extended cache exports added
     diagonal_blocks.py               241 lines   Eq. 4.10-4.11
     spin_recursion.py                286 lines   Eq. 4.9
     z_derivatives.py                 635 lines   Eq. 4.12 + Faa di Bruno
     coordinate_transform.py          266 lines   Eq. 4.15
     transverse_derivs.py             366 lines   Eq. C.1
-    cache.py                         406 lines   NPZ disk caching
+    cache.py                         613 lines   NPZ + extended H cache
 
   spectrum/
     __init__.py                       72 lines
@@ -554,11 +677,14 @@ src/ising_bootstrap/
     constraint_matrix.py             218 lines   Matrix assembly
     solver.py                        302 lines   LP feasibility (HiGHS)
 
-  scans/__init__.py                    7 lines   STUB
+  scans/
+    __init__.py                       30 lines   Public API exports
+    stage_a.py                       560 lines   Binary search, CSV output
+
   plot/__init__.py                     6 lines   STUB
 ```
 
-### Test Code (2,792 lines)
+### Test Code (3,220 lines)
 
 ```
 tests/
@@ -580,6 +706,10 @@ tests/
     __init__.py                        0 lines
     test_crossing.py                 396 lines   36 tests (35 fast + 1 slow)
     test_solver.py                   354 lines   21 tests (19 fast + 2 slow)
+
+  test_scans/
+    __init__.py                        1 line
+    test_stage_a.py                  427 lines   27 tests (24 fast + 3 slow)
 ```
 
 ---

@@ -52,6 +52,13 @@ When working on a feature:
 - Crossing point: z = z̄ = 1/2 (u = v = 1/4)
 - Expected results at Δσ ≈ 0.5182: Δε ≈ 1.41, Δε' ≈ 3.84
 
+## Post-Implementation Checklist
+
+After completing a milestone or significant feature (tests passing, implementation confirmed working):
+
+1. **Run the session-documenter agent** to update `docs/PROGRESS.md`, `docs/TODO.md`, and `docs/SESSION_LOG.md`
+2. Do this proactively — don't wait for the user to ask
+
 ## Common Pitfalls
 
 1. **Block normalization**: Must use Dolan-Osborn convention
