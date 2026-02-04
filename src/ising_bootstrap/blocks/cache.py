@@ -438,11 +438,52 @@ def load_extended_h_array(delta: float, spin: int,
     return H
 
 
+def _compute_single_extended_block(args):
+    """
+    Worker function for parallel precomputation of a single extended H array.
+
+    Designed to be called via multiprocessing.Pool. Imports are done inside
+    the function to avoid pickling issues.
+
+    Parameters
+    ----------
+    args : tuple
+        (delta, spin, n_max) — operator parameters.
+
+    Returns
+    -------
+    tuple
+        (delta, spin, success, error_msg)
+    """
+    delta, spin, n_max = args
+    try:
+        from .coordinate_transform import compute_h_m0_from_block_derivs
+        from .transverse_derivs import compute_all_h_mn
+
+        max_order = 2 * n_max + 1
+        max_k = max_order // 2
+
+        h_m0 = compute_h_m0_from_block_derivs(mpf(delta), spin, max_order + 4)
+        h_all = compute_all_h_mn(delta, spin, h_m0, n_max)
+
+        H = np.zeros((max_order + 1, max_k + 1), dtype=np.float64)
+        for p in range(max_order + 1):
+            for q in range(max_k + 1):
+                if p + 2 * q <= max_order and (p, q) in h_all:
+                    H[p, q] = float(h_all[(p, q)])
+
+        save_extended_h_array(delta, spin, H, n_max, overwrite=True)
+        return (delta, spin, True, None)
+    except Exception as e:
+        return (delta, spin, False, str(e))
+
+
 def precompute_extended_spectrum_blocks(
     spectrum_points: List[Tuple[float, int]],
     n_max: int = N_MAX,
     skip_existing: bool = True,
     verbose: bool = True,
+    workers: int = 1,
 ) -> int:
     """
     Precompute extended H arrays for all unique (Δ, l) pairs in the spectrum.
@@ -461,15 +502,14 @@ def precompute_extended_spectrum_blocks(
         If True, skip points that are already cached.
     verbose : bool
         If True, print progress.
+    workers : int
+        Number of parallel workers. Default 1 (serial).
 
     Returns
     -------
     int
         Number of blocks computed (excluding skipped).
     """
-    from .coordinate_transform import compute_h_m0_from_block_derivs
-    from .transverse_derivs import compute_all_h_mn
-
     max_order = 2 * n_max + 1
     max_k = max_order // 2
 
@@ -478,38 +518,81 @@ def precompute_extended_spectrum_blocks(
         (round(d, 8), s) for d, s in spectrum_points
     ))
 
-    total = len(unique_ops)
-    computed = 0
+    # Filter out already-cached entries
+    to_compute = []
     skipped = 0
-    errors = 0
-
-    for i, (delta, spin) in enumerate(unique_ops):
-        if verbose and (i % 500 == 0 or i == total - 1):
-            print(f"  [{i+1}/{total}] (Δ={delta:.6f}, l={spin})"
-                  f"  computed={computed} skipped={skipped} errors={errors}")
-
+    for delta, spin in unique_ops:
         if skip_existing and extended_cache_exists(delta, spin):
             skipped += 1
-            continue
+        else:
+            to_compute.append((delta, spin))
 
-        try:
-            h_m0 = compute_h_m0_from_block_derivs(
-                mpf(delta), spin, max_order + 4
-            )
-            h_all = compute_all_h_mn(delta, spin, h_m0, n_max)
+    total = len(unique_ops)
+    n_todo = len(to_compute)
 
-            H = np.zeros((max_order + 1, max_k + 1), dtype=np.float64)
-            for p in range(max_order + 1):
-                for q in range(max_k + 1):
-                    if p + 2 * q <= max_order and (p, q) in h_all:
-                        H[p, q] = float(h_all[(p, q)])
+    if verbose:
+        print(f"  {total} unique operators, {skipped} already cached, "
+              f"{n_todo} to compute")
 
-            save_extended_h_array(delta, spin, H, n_max, overwrite=True)
-            computed += 1
-        except (ZeroDivisionError, ValueError, Exception) as e:
-            errors += 1
-            if verbose:
-                print(f"    ERROR at (Δ={delta}, l={spin}): {e}")
+    if n_todo == 0:
+        if verbose:
+            print(f"  Done: 0 computed, {skipped} skipped, 0 errors")
+        return 0
+
+    computed = 0
+    errors = 0
+
+    if workers > 1:
+        # Parallel mode
+        import multiprocessing
+        if verbose:
+            print(f"  Using {workers} parallel workers")
+
+        args_list = [(delta, spin, n_max) for delta, spin in to_compute]
+
+        with multiprocessing.Pool(workers) as pool:
+            for i, result in enumerate(
+                pool.imap_unordered(_compute_single_extended_block, args_list)
+            ):
+                delta, spin, success, error_msg = result
+                if success:
+                    computed += 1
+                else:
+                    errors += 1
+                    if verbose:
+                        print(f"    ERROR at (Δ={delta}, l={spin}): {error_msg}")
+
+                if verbose and ((i + 1) % 500 == 0 or i + 1 == n_todo):
+                    print(f"  [{i+1}/{n_todo}] computed={computed} "
+                          f"errors={errors}")
+    else:
+        # Serial mode
+        from .coordinate_transform import compute_h_m0_from_block_derivs
+        from .transverse_derivs import compute_all_h_mn
+
+        for i, (delta, spin) in enumerate(to_compute):
+            if verbose and (i % 500 == 0 or i + 1 == n_todo):
+                print(f"  [{i+1}/{n_todo}] (Δ={delta:.6f}, l={spin})"
+                      f"  computed={computed} errors={errors}")
+
+            try:
+                h_m0 = compute_h_m0_from_block_derivs(
+                    mpf(delta), spin, max_order + 4
+                )
+                h_all = compute_all_h_mn(delta, spin, h_m0, n_max)
+
+                H = np.zeros((max_order + 1, max_k + 1), dtype=np.float64)
+                for p in range(max_order + 1):
+                    for q in range(max_k + 1):
+                        if p + 2 * q <= max_order and (p, q) in h_all:
+                            H[p, q] = float(h_all[(p, q)])
+
+                save_extended_h_array(delta, spin, H, n_max, overwrite=True)
+                computed += 1
+            except (ZeroDivisionError, ValueError, Exception) as e:
+                errors += 1
+                if verbose:
+                    print(f"    ERROR at (Δ={delta}, l={spin}): {e}")
 
     if verbose:
         print(f"  Done: {computed} computed, {skipped} skipped, {errors} errors"

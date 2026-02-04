@@ -79,6 +79,7 @@ class ScanConfig:
     verbose: bool = False
     precompute_only: bool = False
     scale: bool = True
+    workers: int = 1
 
     def get_tables(self) -> List[DiscretizationTable]:
         """Return the discretization tables to use."""
@@ -484,6 +485,7 @@ def run_precompute(config: ScanConfig) -> None:
         n_max=config.n_max,
         skip_existing=True,
         verbose=config.verbose,
+        workers=config.workers,
     )
 
     if config.verbose:
@@ -535,6 +537,10 @@ def main():
         "--precompute-only", action="store_true",
         help="Only precompute block derivatives, don't run scan"
     )
+    parser.add_argument(
+        "--workers", type=int, default=1,
+        help="Number of parallel workers for precomputation (default: 1)"
+    )
 
     args = parser.parse_args()
 
@@ -548,6 +554,7 @@ def main():
         cache_dir=Path(args.cache_dir) if args.cache_dir else None,
         verbose=args.verbose,
         precompute_only=args.precompute_only,
+        workers=args.workers,
     )
 
     if config.precompute_only:
