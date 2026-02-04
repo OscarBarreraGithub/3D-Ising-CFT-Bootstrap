@@ -7,7 +7,7 @@ name = "ising-bootstrap"
 version = "0.1.0"
 description = "Reproducing Figure 6 of arXiv:1203.6064 - 3D Ising CFT Bootstrap"
 readme = "README.md"
-requires-python = "==3.11.*"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "Research Project"}
