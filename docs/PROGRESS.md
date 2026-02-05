@@ -790,6 +790,46 @@ No new tests were added for the plotting module. Verification was performed manu
 
 ---
 
+## Production Run Status
+
+### Block Precomputation
+
+**Status**: In progress (425,429 / 520,476 cached, 81.7%)
+
+**Job History**:
+- Job 58613547 (single-node `precompute.slurm`): Cached ~60,851 operators before timeout.
+- Job 58631295 (`precompute_array.slurm`, 5 shards, 8h limit): Each shard completed
+  ~45,000-46,500 operators before timeout. Total after this run: 289,665 cached.
+- Job 58723936 (`precompute_array.slurm`, 10 shards, 10h limit): Each shard completed
+  ~14,500-15,000 of ~23,081 assigned operators before timeout. Total: 425,429 cached.
+  Throughput dropped to ~1,500 ops/hr/shard because remaining operators have higher spin
+  (spin 20-100, each taking 7-62s vs 0.3s for spin-0).
+
+**Root cause of slowdown**: Operators are sorted by (delta, spin), so early jobs process
+cheap spin-0 operators while later jobs face expensive high-spin operators. The spin recursion
+cost scales as O(l²) due to the recursive 3F2 hypergeometric evaluation tree.
+
+**Additional bottleneck**: The cache existence check used `Path.exists()` per operator
+(520K calls on NFS). Fixed in Session 2026-02-05 by switching to bulk `os.listdir()`,
+saving ~46 minutes of startup overhead per shard.
+
+**Resolution**: Time limit bumped to 18h, filesystem bottleneck fixed. Full pipeline
+resubmitted as Job 58827408 (precompute) → 58827409 (Stage A) → 58827430 (Merge A) →
+58827433 (Stage B) → 58827435 (Final merge + plot). ~95,047 operators remain.
+
+### Pole Error at (Delta=0.5, l=0)
+
+The ₃F₂ hypergeometric function has a pole when Delta = alpha = 0.5 (spin-0 at the exact
+unitarity bound in D=3), because the denominator parameter b₂ = Delta - alpha = 0. This is
+**expected and harmless**:
+- Affects exactly 1 operator out of 520,476
+- Caught and skipped gracefully by the error handler in `precompute_extended_spectrum_blocks()`
+- The LP constraint matrix builder also catches this and leaves a zero row (trivially satisfied)
+- The identity contribution (G=1 at Delta=0) is handled analytically via F_id = -2 U^{m,n}
+- Already documented in Milestone 3 "Design Decisions" item 4 and "Known Limitations" item 3
+
+---
+
 ## File Inventory
 
 ### Source Code (~5,643 lines)

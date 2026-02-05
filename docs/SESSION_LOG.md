@@ -4,6 +4,91 @@ This file documents completed implementation sessions with details for future se
 
 ---
 
+## Session 2026-02-05: NFS Cache Bottleneck Fix & Pipeline Resubmission
+
+**Date**: 2026-02-05
+**Duration**: Code fix + pipeline submission
+**Test Status**: 302/302 passing (75.66s, 1 expected warning)
+
+### Session Summary
+
+Diagnosed why precompute throughput dropped ~4x between successive SLURM jobs (5,800 → 1,500
+ops/hr/shard). Two causes: (1) remaining operators have higher spin (cost scales O(l²)), and
+(2) the cache existence check called `Path.exists()` 520K times on NFS (~46 min overhead).
+Fixed the filesystem bottleneck by switching to bulk `os.listdir()` with set membership.
+Bumped SLURM time limit from 10h to 18h. Submitted full pipeline with dependency chain.
+
+### Changes Made
+
+**Files Modified:**
+- `src/ising_bootstrap/blocks/cache.py` - Added `list_extended_cache_filenames()` using
+  `os.listdir()` for O(1) lookups; updated `precompute_extended_spectrum_blocks()` to use it
+- `src/ising_bootstrap/blocks/__init__.py` - Exported `list_extended_cache_filenames`
+- `src/ising_bootstrap/scans/stage_a.py` - Updated `load_h_cache_from_disk()` to use bulk listing
+- `jobs/precompute_array.slurm` - Time limit 10h → 18h
+- `docs/PROGRESS.md` - Updated cache count (425K/520K), documented slowdown root cause
+- `docs/SESSION_LOG.md` - This entry
+
+### Key Findings
+
+1. **Spin-dependent cost**: Spin-100 operators take ~62s each (vs 0.3s for spin-0) due to
+   recursive 3F2 evaluations (2,601 recursive calls vs 1). Successive jobs process harder
+   operators because the sort order puts cheap ones first.
+
+2. **NFS overhead**: 520K `Path.exists()` calls on the FASRC NFS took ~46 minutes. A single
+   `os.listdir()` + set lookup takes <1 second for the same check.
+
+### Pipeline Submitted
+
+Job chain: 58827408 (precompute, 10 shards × 18h) → 58827409 (Stage A, 51 tasks) →
+58827430 (Merge A) → 58827433 (Stage B, 51 tasks) → 58827435 (Final merge + plot).
+Expected total wall time: ~10-12 hours from precompute start.
+
+---
+
+## Session 2026-02-04: Block Precomputation Timeout Fix
+
+**Date**: 2026-02-04
+**Duration**: Configuration and documentation update
+**Test Status**: No code changes; 302/302 tests unaffected
+
+### Session Summary
+
+Diagnosed timeout of block precomputation SLURM array job (58631295). Each of the 5 shards
+completed only ~50% of its assigned ~91,925 operators in the 8-hour time limit. Updated SLURM
+configuration from 5 shards / 8 hours to 10 shards / 10 hours based on observed throughput
+of ~5,800 operators/hour/shard. Also documented the expected pole error at (Delta=0.5, l=0)
+and updated timing estimates across documentation.
+
+### Changes Made
+
+**Files Modified:**
+- `jobs/precompute_array.slurm` - Increased from 5 to 10 shards, 8h to 10h time limit, updated comments with observed throughput
+- `cluster.md` - Corrected precompute time estimates and operator count (57K -> 520K)
+- `docs/RUN.md` - Updated pipeline timing table (precompute: 5 shards/4h -> 10 shards/9h)
+- `docs/PROGRESS.md` - Added "Production Run Status" section documenting cache state and pole error
+- `docs/SESSION_LOG.md` - This entry
+
+### Key Findings
+
+1. **Throughput**: ~5,800 extended block computations per hour per shard with 8 workers.
+   The original "~3-4h" estimate was based on reduced discretization testing and was ~4x too low.
+
+2. **Pole Error**: The error "pole in hypergeometric series" at (Delta=0.5, l=0) is the known
+   3F2 pole at the spin-0 unitarity bound. Already handled by the code (caught and skipped).
+   Affects 1 operator out of 520,476. Zero impact on LP constraints.
+
+3. **Resumability**: The precompute function has `skip_existing=True` by default. Resubmission
+   will skip all 289,665 cached operators and only compute the remaining 230,811.
+
+### Current State / What Works
+
+**Cache**: 289,665 / 520,476 operators cached (55.7%)
+**Remaining**: 230,811 operators
+**Plan**: Resubmit with 10 shards. Each shard gets ~23K operators (~4h). 10h limit provides 2.5x margin.
+
+---
+
 ## Session 2026-02-03: Milestone 4 - Stage A Scan Implementation
 
 **Date**: 2026-02-03

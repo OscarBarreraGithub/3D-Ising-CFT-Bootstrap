@@ -190,13 +190,13 @@ echo "Pipeline submitted: $PRECOMPUTE -> $STAGE_A -> $MERGE_A -> $STAGE_B -> $FI
 
 | Step | Job Script | Tasks | Time | Output |
 |------|-----------|-------|------|--------|
-| 1. Precompute | `jobs/precompute_array.slurm` | 5 shards x 8 CPUs | ~4h | `data/cached_blocks/ext_*.npy` |
+| 1. Precompute | `jobs/precompute_array.slurm` | 10 shards x 8 CPUs | ~9h | `data/cached_blocks/ext_*.npy` |
 | 2. Stage A | `jobs/stage_a.slurm` | 51 array tasks | ~1h | `data/eps_bound_*.csv` |
 | 3. Merge A | `jobs/merge_stage_a_job.slurm` | 1 task | <1 min | `data/eps_bound.csv` |
 | 4. Stage B | `jobs/stage_b.slurm` | 51 array tasks | ~1h | `data/epsprime_bound_*.csv` |
 | 5. Final | `jobs/final_merge_and_plot.slurm` | 1 task | <1 min | `figures/fig6_reproduction.png` |
 
-Total wall time: ~6-7 hours (steps run sequentially via dependencies).
+Total wall time: ~12-13 hours (steps run sequentially via dependencies).
 
 ### Monitoring
 
@@ -225,7 +225,7 @@ FINAL=$(sbatch --dependency=afterok:${STAGE_B} --parsable jobs/final_merge_and_p
 
 | Script | Purpose |
 |--------|---------|
-| `jobs/precompute_array.slurm` | 5-shard array job, precomputes 520K block derivatives |
+| `jobs/precompute_array.slurm` | 10-shard array job, precomputes 520K block derivatives |
 | `jobs/precompute.slurm` | Single-job precompute (24h, for non-sharded use) |
 | `jobs/stage_a.slurm` | 51-task array, one per Δσ point |
 | `jobs/merge_stage_a.sh` | Bash script to merge Stage A CSVs |

@@ -10,9 +10,10 @@ Cache format: NPZ files at data/cached_blocks/d{delta:.6f}_l{spin}.npz
 Reference: arXiv:1203.6064, Appendix D
 """
 
+import os
 import numpy as np
 from pathlib import Path
-from typing import Dict, Tuple, List, Optional, Union
+from typing import Dict, Tuple, List, Optional, Set, Union
 from mpmath import mpf
 
 from ..config import CACHE_DIR, N_MAX, MPMATH_PRECISION
@@ -351,6 +352,24 @@ def extended_cache_exists(delta: float, spin: int) -> bool:
     return get_extended_cache_filename(delta, spin).exists()
 
 
+def list_extended_cache_filenames() -> Set[str]:
+    """
+    List all extended cache filenames in the cache directory in one shot.
+
+    Uses os.listdir() instead of per-file Path.exists() calls, which is
+    orders of magnitude faster on network filesystems with 400K+ files.
+
+    Returns
+    -------
+    set of str
+        Set of filenames (not full paths) matching ext_*.npy pattern.
+    """
+    try:
+        return {f for f in os.listdir(CACHE_DIR) if f.startswith("ext_") and f.endswith(".npy")}
+    except FileNotFoundError:
+        return set()
+
+
 def save_extended_h_array(delta: float, spin: int,
                           H: np.ndarray, n_max: int = N_MAX,
                           overwrite: bool = False) -> Path:
@@ -524,14 +543,20 @@ def precompute_extended_spectrum_blocks(
         (round(d, 8), s) for d, s in spectrum_points
     ))
 
-    # Filter out already-cached entries
+    # Filter out already-cached entries using bulk directory listing
+    # (single os.listdir is ~1000x faster than per-file Path.exists on NFS)
     to_compute = []
     skipped = 0
-    for delta, spin in unique_ops:
-        if skip_existing and extended_cache_exists(delta, spin):
-            skipped += 1
-        else:
-            to_compute.append((delta, spin))
+    if skip_existing:
+        cached_filenames = list_extended_cache_filenames()
+        for delta, spin in unique_ops:
+            fname = f"ext_d{delta:.8f}_l{spin}.npy"
+            if fname in cached_filenames:
+                skipped += 1
+            else:
+                to_compute.append((delta, spin))
+    else:
+        to_compute = list(unique_ops)
 
     total = len(unique_ops)
     n_todo = len(to_compute)

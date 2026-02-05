@@ -52,6 +52,7 @@ from ..lp.constraint_matrix import (
 from ..lp.solver import check_feasibility, FeasibilityResult
 from ..blocks.cache import (
     extended_cache_exists,
+    list_extended_cache_filenames,
     load_extended_h_array,
     precompute_extended_spectrum_blocks,
 )
@@ -302,9 +303,12 @@ def load_h_cache_from_disk(
     for p in spectrum:
         unique_ops.add((round(p.delta, 8), p.spin))
 
+    # Use bulk directory listing instead of per-file existence checks
+    cached_filenames = list_extended_cache_filenames()
     missing = []
     for delta, spin in sorted(unique_ops):
-        if extended_cache_exists(delta, spin):
+        fname = f"ext_d{delta:.8f}_l{spin}.npy"
+        if fname in cached_filenames:
             h_cache[(delta, spin)] = load_extended_h_array(delta, spin, n_max)
         else:
             missing.append((delta, spin))

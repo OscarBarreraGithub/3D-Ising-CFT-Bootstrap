@@ -93,7 +93,7 @@ The production run has two phases: block precomputation (one-time, expensive) an
 
 ### 3a. Precompute block derivatives
 
-This computes the extended H arrays for all ~57K unique operators in the spectrum. With 8 workers, this takes ~2-4 hours instead of ~16-32 hours serial.
+This computes the extended H arrays for all ~520K operators in the spectrum. With 8 workers in a single job, this takes ~14-16 hours. With 10 shards (`precompute_array.slurm`), each shard takes ~5-9 hours depending on cache state. Observed throughput: ~5,800 operators/hour per shard.
 
 ```bash
 sbatch jobs/precompute.slurm
@@ -106,7 +106,7 @@ squeue -u $USER
 tail -f logs/precompute_*.log
 ```
 
-**Expected**: ~57K blocks computed, saved to `data/cached_blocks/ext_*.npy`
+**Expected**: ~520K blocks computed, saved to `data/cached_blocks/ext_*.npy`
 
 ### 3b. Run Stage A array job
 
@@ -154,7 +154,7 @@ grep "0.518" data/eps_bound.csv
 
 | Job | Partition | Time | Memory | CPUs | Notes |
 |-----|-----------|------|--------|------|-------|
-| Precompute | shared | 4h | 8G | 8 | One-time; `--workers 8` |
+| Precompute | shared | 10h | 8G | 8 | 10 shards; ~5,800 ops/hr/shard |
 | Stage A (per task) | shared | 1h | 4G | 1 | 51 array tasks |
 | Quick test | test | 20m | 4G | 1 | Interactive salloc |
 
@@ -167,7 +167,7 @@ $WORKDIR/ising_bootstrap/
 ├── src/ising_bootstrap/          # Source code
 ├── tests/                        # Test suite (277 tests)
 ├── data/
-│   ├── cached_blocks/            # ~57K .npy files (~1 GB)
+│   ├── cached_blocks/            # ~520K .npy files (~1 GB)
 │   │   ├── ext_d0.50000000_l0.npy
 │   │   ├── ext_d0.50002000_l0.npy
 │   │   └── ...

@@ -2,20 +2,21 @@
 #SBATCH --job-name=ising_precompute
 #SBATCH --account=iaifi_lab
 #SBATCH --partition=shared
-#SBATCH --array=0-4
-#SBATCH --time=08:00:00
+#SBATCH --array=0-9
+#SBATCH --time=18:00:00
 #SBATCH --mem=8G
 #SBATCH --cpus-per-task=8
 #SBATCH --output=logs/precompute_%A_%a.log
 #SBATCH --error=logs/precompute_%A_%a.log
 
-# Sharded precompute: splits 520K operators across 5 parallel jobs.
-# Each job handles every 5th operator (~104K each, ~3-4h with 8 workers).
+# Sharded precompute: splits ~520K operators across 10 parallel jobs.
+# Each job handles every 10th operator (~52K each, high-spin ops take ~60s each).
+# Observed throughput: ~5,800 operators/hour per shard (8 workers).
 # Resumable: skips already-cached operators if resubmitted.
 
 set -e
 
-echo "=== Ising Bootstrap: Block Precomputation (shard ${SLURM_ARRAY_TASK_ID}/5) ==="
+echo "=== Ising Bootstrap: Block Precomputation (shard ${SLURM_ARRAY_TASK_ID}/10) ==="
 echo "Job ID: ${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
 echo "Node: $(hostname)"
 echo "CPUs: $SLURM_CPUS_PER_TASK"
@@ -50,7 +51,7 @@ python -m ising_bootstrap.scans.stage_a \
     --precompute-only \
     --workers ${SLURM_CPUS_PER_TASK} \
     --shard-id ${SLURM_ARRAY_TASK_ID} \
-    --num-shards 5 \
+    --num-shards 10 \
     --verbose
 
 echo ""
