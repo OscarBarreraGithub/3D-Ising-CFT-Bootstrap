@@ -306,12 +306,20 @@ def load_h_cache_from_disk(
     # Use bulk directory listing instead of per-file existence checks
     cached_filenames = list_extended_cache_filenames()
     missing = []
+    corrupted = 0
     for delta, spin in sorted(unique_ops):
         fname = f"ext_d{delta:.8f}_l{spin}.npy"
         if fname in cached_filenames:
-            h_cache[(delta, spin)] = load_extended_h_array(delta, spin, n_max)
+            try:
+                h_cache[(delta, spin)] = load_extended_h_array(delta, spin, n_max)
+            except (EOFError, ValueError, OSError):
+                # Corrupted file (e.g. truncated by SLURM timeout) — treat as missing
+                corrupted += 1
+                missing.append((delta, spin))
         else:
             missing.append((delta, spin))
+    if corrupted and verbose:
+        print(f"  WARNING: {corrupted} corrupted cache files, will recompute")
 
     if missing:
         if verbose:

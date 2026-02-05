@@ -3,7 +3,7 @@
 #SBATCH --account=iaifi_lab
 #SBATCH --partition=shared
 #SBATCH --array=0-50
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --mem=4G
 #SBATCH --cpus-per-task=1
 #SBATCH --output=logs/stage_b_%A_%a.log
