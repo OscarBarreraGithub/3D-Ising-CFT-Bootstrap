@@ -4,7 +4,7 @@
 #SBATCH --partition=shared
 #SBATCH --array=0-50
 #SBATCH --time=02:00:00
-#SBATCH --mem=4G
+#SBATCH --mem=8G
 #SBATCH --cpus-per-task=1
 #SBATCH --output=logs/stage_a_%A_%a.log
 #SBATCH --error=logs/stage_a_%A_%a.log
