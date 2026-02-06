@@ -300,3 +300,54 @@ def solve_bootstrap(
         print(f"Result: {result.status}")
 
     return result
+
+
+def check_feasibility_extended(
+    A: np.ndarray,
+    f_id: np.ndarray,
+    spectrum: list,
+    delta_sigma: float,
+    n_max: int = N_MAX,
+    dps: int = 50,
+    dps_verify: Optional[int] = 80,
+    active_hint: Optional[set] = None,
+    verbose: bool = False,
+) -> FeasibilityResult:
+    """
+    Extended-precision feasibility check using mpmath column-generation simplex.
+
+    Delegates to simplex.check_feasibility_extended(). See that function for
+    full documentation.
+
+    Parameters
+    ----------
+    A : np.ndarray
+        Float64 constraint matrix (N, n_components) for fast pricing.
+    f_id : np.ndarray
+        Float64 identity vector.
+    spectrum : list of SpectrumPoint
+        Full spectrum for mpmath row computation.
+    delta_sigma : float
+        External scalar dimension.
+    n_max : int
+        Truncation parameter.
+    dps : int
+        Primary mpmath precision.
+    dps_verify : int or None
+        Verification precision (set None to skip).
+    active_hint : set or None
+        Warm-start active set from previous solve.
+    verbose : bool
+        Print progress.
+
+    Returns
+    -------
+    FeasibilityResult
+        With tri-state status: excluded=True/False/None.
+    """
+    from .simplex import check_feasibility_extended as _cfe
+    return _cfe(
+        A, f_id, spectrum, delta_sigma,
+        n_max=n_max, dps=dps, dps_verify=dps_verify,
+        active_hint=active_hint, verbose=verbose,
+    )

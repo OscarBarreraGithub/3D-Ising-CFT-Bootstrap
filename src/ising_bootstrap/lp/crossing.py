@@ -329,3 +329,133 @@ def build_comb_cache(n_max: int = N_MAX) -> Dict[Tuple[int, int], int]:
         for k in range(n + 1):
             cache[(n, k)] = comb(n, k)
     return cache
+
+
+# =============================================================================
+# Extended-precision (mpmath) variants
+# =============================================================================
+
+def compute_prefactor_table_mp(
+    delta_sigma: float,
+    n_max: int = N_MAX,
+    dps: int = MPMATH_PRECISION,
+) -> Dict[Tuple[int, int], mpf]:
+    """
+    Compute U^{j,k}(Δσ) at full mpmath precision (no float64 cast).
+
+    Same recursion as compute_prefactor_table, but returns a dict of mpf values.
+    """
+    saved_dps = mp.dps
+    mp.dps = dps
+    try:
+        alpha = mpf(delta_sigma)
+        max_order = 2 * n_max + 1
+        max_k = max_order // 2
+
+        T = [[mpf(0)] * (max_k + 1) for _ in range(max_order + 1)]
+
+        # Column k = 0
+        T[0][0] = mpf(1)
+        for j in range(max_order):
+            t_j = T[j][0]
+            t_jm1 = T[j - 1][0] if j >= 1 else mpf(0)
+            T[j + 1][0] = ((2 * alpha - 2 * j) * t_j
+                            + (2 * alpha - j + 1) * t_jm1) / (j + 1)
+
+        # Columns k = 1, ..., max_k
+        for k in range(max_k):
+            max_j = max_order - 2 * (k + 1)
+            for j in range(max_j + 1):
+                t_jk = T[j][k]
+                t_jm1 = T[j - 1][k + 1] if j >= 1 else mpf(0)
+                t_jm2 = T[j - 2][k + 1] if j >= 2 else mpf(0)
+                T[j][k + 1] = (k - alpha) / (k + 1) * t_jk - 2 * t_jm1 - t_jm2
+
+        # Convert to derivatives: U^{j,k} = j! k! 4^{-α} T[j][k]
+        prefactor_4 = mpf('0.25') ** alpha
+        result = {}
+        for j in range(max_order + 1):
+            for k in range(max_k + 1):
+                if j + 2 * k <= max_order:
+                    result[(j, k)] = prefactor_4 * factorial(j) * factorial(k) * T[j][k]
+
+        return result
+    finally:
+        mp.dps = saved_dps
+
+
+def compute_identity_vector_mp(
+    delta_sigma: float,
+    n_max: int = N_MAX,
+    dps: int = MPMATH_PRECISION,
+) -> List[mpf]:
+    """
+    Compute F_id^{m,n}(Δσ) at full mpmath precision.
+
+    F_id^{m,n} = -2 U^{m,n} for m odd.
+    """
+    U_mp = compute_prefactor_table_mp(delta_sigma, n_max, dps)
+    index_set = generate_index_set(n_max)
+
+    f_id = []
+    for m, n in index_set:
+        f_id.append(mpf(-2) * U_mp[(m, n)])
+    return f_id
+
+
+def compute_extended_h_array_mp(
+    delta: Union[float, mpf],
+    spin: int,
+    n_max: int = N_MAX,
+    dps: int = MPMATH_PRECISION,
+) -> Dict[Tuple[int, int], mpf]:
+    """
+    Compute block derivatives h_{p,q} at full mpmath precision (no float64 cast).
+
+    Returns a dict mapping (p, q) -> mpf value.
+    """
+    from ..blocks.coordinate_transform import compute_h_m0_from_block_derivs
+    from ..blocks.transverse_derivs import compute_all_h_mn
+
+    saved_dps = mp.dps
+    mp.dps = dps
+    try:
+        max_order = 2 * n_max + 1
+        h_m0 = compute_h_m0_from_block_derivs(mpf(delta), spin, max_order + 4)
+        h_all = compute_all_h_mn(delta, spin, h_m0, n_max)
+        return h_all
+    finally:
+        mp.dps = saved_dps
+
+
+def compute_crossing_vector_mp(
+    H_mp: Dict[Tuple[int, int], mpf],
+    U_mp: Dict[Tuple[int, int], mpf],
+    index_set: List[Tuple[int, int]],
+    comb_cache: Dict[Tuple[int, int], int],
+    max_order: int,
+) -> List[mpf]:
+    """
+    Compute crossing vector F^{m,n} at full mpmath precision.
+
+    Same Leibniz rule as compute_crossing_vector_fast but all arithmetic in mpmath.
+    """
+    result = []
+    for m, n in index_set:
+        val = mpf(0)
+        sign_j = mpf(1)
+        for j in range(m + 1):
+            p = m - j
+            c_mj = comb_cache[(m, j)]
+            for k in range(n + 1):
+                q = n - k
+                if p + 2 * q > max_order:
+                    continue
+                h_pq = H_mp.get((p, q), mpf(0))
+                if h_pq == 0 and p + q > 0:
+                    continue
+                u_jk = U_mp.get((j, k), mpf(0))
+                val += c_mj * comb_cache[(n, k)] * sign_j * u_jk * h_pq
+            sign_j = -sign_j
+        result.append(mpf(2) * val)
+    return result

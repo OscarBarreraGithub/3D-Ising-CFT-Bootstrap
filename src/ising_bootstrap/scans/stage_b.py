@@ -44,7 +44,7 @@ from ..config import (
 from ..spectrum.discretization import (
     SpectrumPoint, generate_full_spectrum,
 )
-from ..lp.solver import check_feasibility
+from ..lp.solver import check_feasibility, check_feasibility_extended
 from .stage_a import (
     binary_search_eps,
     build_full_constraint_matrix,
@@ -78,6 +78,9 @@ class StageBConfig:
     verbose: bool = False
     precompute_only: bool = False
     scale: bool = True
+    use_extended: bool = True
+    dps: int = 50
+    dps_verify: Optional[int] = 80
     workers: int = 1
 
     def get_tables(self) -> List[DiscretizationTable]:
@@ -108,6 +111,7 @@ def find_eps_prime_bound(
     scalar_deltas: np.ndarray,
     spinning_mask: np.ndarray,
     config: StageBConfig,
+    full_spectrum: Optional[list] = None,
 ) -> Tuple[float, int]:
     """
     Binary search for Δε'_max at a fixed Δσ with Δε fixed from Stage A.
@@ -141,21 +145,47 @@ def find_eps_prime_bound(
     n_iter : int
         Number of binary search iterations.
     """
-    # Precompute the mask for scalars below the first gap (always excluded)
-    scalars_below_eps = scalar_mask & (scalar_deltas < delta_eps - 1e-10)
+    # Epsilon anchor: nearest scalar sample at or above delta_eps within a band.
+    # This is more robust than exact float equality on a discretized grid.
+    eps_anchor_band = max(delta_eps * 1e-4, 1e-6)
+    scalars_at_eps = scalar_mask & (
+        (scalar_deltas >= delta_eps - eps_anchor_band) &
+        (scalar_deltas <= delta_eps + eps_anchor_band)
+    )
+    # If no sample falls in the band, take the nearest scalar at or above delta_eps
+    if not np.any(scalars_at_eps):
+        above_eps = scalar_mask & (scalar_deltas >= delta_eps - 1e-10)
+        if np.any(above_eps):
+            above_deltas = scalar_deltas[above_eps]
+            closest_idx = np.argmin(np.abs(above_deltas - delta_eps))
+            nearest_delta = above_deltas[closest_idx]
+            scalars_at_eps = scalar_mask & (
+                np.abs(scalar_deltas - nearest_delta) < 1e-10
+            )
 
     def is_excluded(eps_prime_trial: float) -> bool:
-        # Include: spinning + scalars below Δε + scalars at or above Δε'
-        # This means scalars in [Δε, Δε') are excluded (the second gap)
+        # Include: spinning + scalar at Δε (epsilon anchor) + scalars at or above Δε'
+        # Exclude: scalars below Δε and scalars between Δε and Δε'
         scalars_above_eps_prime = scalar_mask & (
             scalar_deltas >= eps_prime_trial - 1e-10
         )
-        mask = spinning_mask | scalars_below_eps | scalars_above_eps_prime
+        mask = spinning_mask | scalars_at_eps | scalars_above_eps_prime
         A_sub = A[mask]
         if A_sub.shape[0] == 0:
             return True
-        result = check_feasibility(A_sub, f_id, scale=config.scale)
-        return result.excluded
+
+        if config.use_extended and full_spectrum is not None:
+            mask_indices = np.where(mask)[0]
+            spectrum_sub = [full_spectrum[i] for i in mask_indices]
+            result = check_feasibility_extended(
+                A_sub, f_id, spectrum_sub, delta_sigma,
+                n_max=config.n_max, dps=config.dps,
+                dps_verify=config.dps_verify, verbose=False,
+            )
+            return result.excluded if result.excluded is not None else False
+        else:
+            result = check_feasibility(A_sub, f_id, scale=config.scale)
+            return result.excluded
 
     # Search range: just above Δε to the upper bound
     lo = delta_eps
@@ -338,6 +368,7 @@ def run_scan(
             A, f_id,
             scalar_mask, scalar_deltas, spinning_mask,
             config,
+            full_spectrum=full_spectrum,
         )
 
         if config.verbose:
