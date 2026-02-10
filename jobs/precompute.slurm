@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=ising_precompute
-#SBATCH --account=iaifi_lab
+#SBATCH --account=randall_lab
 #SBATCH --partition=shared
 #SBATCH --time=24:00:00
 #SBATCH --mem=8G

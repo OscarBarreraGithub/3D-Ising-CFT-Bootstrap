@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=lp_diagnose
-#SBATCH --account=iaifi_lab
+#SBATCH --account=randall_lab
 #SBATCH --partition=shared
 #SBATCH --time=01:00:00
 #SBATCH --mem=8G

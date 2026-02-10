@@ -222,7 +222,7 @@ def run_sdpb_solver(
         "--bind", f"{sdp_dir.parent}:{sdp_dir.parent}",
         "--bind", f"{out_dir.parent}:{out_dir.parent}",
         str(config.image_path),
-        "mpirun", "--allow-run-as-root",
+        "mpirun", "--allow-run-as-root", "--oversubscribe",
         "-n", str(config.n_cores),
         "sdpb",
         f"--precision={config.precision}",

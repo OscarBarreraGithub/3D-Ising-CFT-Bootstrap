@@ -795,9 +795,32 @@ No new tests were added for the plotting module. Verification was performed manu
 
 ### SDPB Stage A (Current)
 
-**Status**: Running (Job 59675873, 51 array tasks, 8 CPUs / 16 GB each)
+**Status**: Blocked by NFS cache loading bottleneck (see below). Job 59675873 running
+but zero results produced after 1+ hour — all 51 tasks stuck loading 520K .npy files.
 **Backend**: SDPB 3.1.0 via Singularity (`tools/sdpb-3.1.0.sif`), 1024-bit precision
 **Expected**: Non-trivial Delta_epsilon_max curve (not all 0.5 like the scipy run)
+
+### NFS Cache Loading Bottleneck (2026-02-09)
+
+**Problem**: Each Stage A task loads 520K individual `.npy` files from NFS via
+`load_h_cache_from_disk()`. Each `np.load()` requires ~3-10ms of NFS syscalls
+(open + read + close). At 520K files: **26-87 minutes of pure I/O per task**.
+With 51 array tasks loading independently, the NFS load is 51x worse. After 1+ hour,
+zero tasks produced any results.
+
+**Additional issue**: Python stdout is fully buffered when piped to a file (which SLURM
+does), so log files showed only 7 lines (the startup banner) even if more progress had
+been made.
+
+**Fix**: Consolidate 520K `.npy` files into a single `.npz` archive file.
+- `jobs/consolidate_cache.py`: One-time script to pack all files into
+  `data/cached_blocks/ext_cache_consolidated.npz`
+- `jobs/consolidate_cache.slurm`: SLURM job to run consolidation (2h, 16G)
+- `stage_a.py`: Added fast path in `load_h_cache_from_disk()` — checks for consolidated
+  `.npz` first, loads all arrays in a single NFS read (~10-30s vs 60+ min)
+- Added `PYTHONUNBUFFERED=1` to all SLURM scripts for real-time log output
+
+**Expected improvement**: Cache loading drops from 60+ min to ~10-30s per task.
 
 ### Block Precomputation
 

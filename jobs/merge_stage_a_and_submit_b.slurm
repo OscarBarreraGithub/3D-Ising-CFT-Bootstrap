@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=ising_merge_a_submit_b
-#SBATCH --account=iaifi_lab
+#SBATCH --account=randall_lab
 #SBATCH --partition=shared
 #SBATCH --time=00:10:00
 #SBATCH --mem=2G
@@ -11,14 +11,19 @@
 # Merge Stage A results and submit Stage B + final plot jobs.
 # Runs after all Stage A array tasks complete.
 
-set -e
+set -euo pipefail
+export PYTHONUNBUFFERED=1
 
 echo "=== Merge Stage A + Submit Stage B ==="
 echo "Job ID: $SLURM_JOB_ID"
 echo "Start: $(date)"
 echo ""
 
-cd "$SLURM_SUBMIT_DIR"
+source ~/.bashrc
+conda activate ising_bootstrap
+
+PROJECT_DIR="/n/holylabs/schwartz_lab/Lab/obarrera/3D-Ising-CFT-Bootstrap"
+cd "$PROJECT_DIR"
 
 # --- Step 1: Merge Stage A CSVs ---
 echo "--- Merging Stage A results ---"
@@ -45,7 +50,7 @@ echo "Sanity check passed: ${n_bad}/${n_rows} points at unitarity floor"
 # --- Step 3: Submit Stage B array job ---
 echo ""
 echo "--- Submitting Stage B ---"
-STAGE_B_JOB=$(sbatch --parsable jobs/stage_b_extended.slurm)
+STAGE_B_JOB=$(sbatch --parsable jobs/stage_b_sdpb.slurm)
 echo "Stage B job: ${STAGE_B_JOB}"
 
 # --- Step 4: Submit final merge + plot (after Stage B) ---

@@ -33,7 +33,7 @@ from ..config import (
     DEFAULT_SIGMA_MIN, DEFAULT_SIGMA_MAX, DEFAULT_SIGMA_STEP,
     DEFAULT_EPS_TOLERANCE,
     FULL_DISCRETIZATION, REDUCED_DISCRETIZATION,
-    DATA_DIR,
+    DATA_DIR, CACHE_DIR,
     DiscretizationTable,
 )
 from ..spectrum.discretization import (
@@ -329,7 +329,26 @@ def load_h_cache_from_disk(
     for p in spectrum:
         unique_ops.add((round(p.delta, 8), p.spin))
 
-    # Use bulk directory listing instead of per-file existence checks
+    # Fast path: load from consolidated .npz archive (single NFS read instead of 520K)
+    consolidated_path = CACHE_DIR / "ext_cache_consolidated.npz"
+    if consolidated_path.exists():
+        if verbose:
+            print(f"  Loading consolidated cache: {consolidated_path}")
+        data = np.load(consolidated_path)
+        loaded = 0
+        for key in data.files:
+            delta_str, spin_str = key.rsplit("_", 1)
+            delta, spin = float(delta_str), int(spin_str)
+            rounded = round(delta, 8)
+            if (rounded, spin) in unique_ops:
+                h_cache[(rounded, spin)] = data[key]
+                loaded += 1
+        data.close()
+        if verbose:
+            print(f"  Loaded {loaded} extended block arrays from consolidated cache")
+        return h_cache
+
+    # Fallback: Use bulk directory listing instead of per-file existence checks
     cached_filenames = list_extended_cache_filenames()
     missing = []
     corrupted = 0

@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=ising_stage_b_sdpb
-#SBATCH --account=iaifi_lab
+#SBATCH --account=randall_lab
 #SBATCH --partition=shared
 #SBATCH --array=0-50
 #SBATCH --time=08:00:00
-#SBATCH --mem=8G
-#SBATCH --cpus-per-task=4
+#SBATCH --mem=64G
+#SBATCH --cpus-per-task=8
 #SBATCH --output=logs/stage_b_sdpb_%A_%a.log
 #SBATCH --error=logs/stage_b_sdpb_%A_%a.log
 
@@ -14,6 +14,7 @@
 # Requires Stage A results in data/eps_bound.csv.
 
 set -euo pipefail
+export PYTHONUNBUFFERED=1
 
 # --- Environment ---
 source ~/.bashrc

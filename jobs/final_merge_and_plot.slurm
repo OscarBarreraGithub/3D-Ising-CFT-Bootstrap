@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=ising_final
-#SBATCH --account=iaifi_lab
+#SBATCH --account=randall_lab
 #SBATCH --partition=shared
 #SBATCH --time=00:10:00
 #SBATCH --mem=2G
@@ -11,27 +11,19 @@
 # Final pipeline step: merge Stage B results and generate Figure 6.
 # Runs after Stage B array job completes.
 
-set -e
+set -euo pipefail
+export PYTHONUNBUFFERED=1
 
 echo "=== Final: Merge Stage B + Plot Figure 6 ==="
 echo "Job ID: $SLURM_JOB_ID"
 echo "Start: $(date)"
 echo ""
 
-# --- Conda activation ---
-if [ -f "$HOME/miniforge3/etc/profile.d/conda.sh" ]; then
-    source "$HOME/miniforge3/etc/profile.d/conda.sh"
-elif [ -f "$HOME/.conda/etc/profile.d/conda.sh" ]; then
-    source "$HOME/.conda/etc/profile.d/conda.sh"
-elif command -v conda >/dev/null 2>&1; then
-    source "$(conda info --base)/etc/profile.d/conda.sh"
-else
-    echo "ERROR: Could not find conda" >&2
-    exit 1
-fi
+source ~/.bashrc
 conda activate ising_bootstrap
 
-cd "$SLURM_SUBMIT_DIR"
+PROJECT_DIR="/n/holylabs/schwartz_lab/Lab/obarrera/3D-Ising-CFT-Bootstrap"
+cd "$PROJECT_DIR"
 
 # Step 1: Merge Stage B CSVs
 echo "--- Merging Stage B results ---"

@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=ising_stage_a_ext
-#SBATCH --account=iaifi_lab
+#SBATCH --account=randall_lab
 #SBATCH --partition=shared
 #SBATCH --array=0-50
 #SBATCH --time=12:00:00

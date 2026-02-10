@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=ising_merge_a
-#SBATCH --account=iaifi_lab
+#SBATCH --account=randall_lab
 #SBATCH --partition=shared
 #SBATCH --time=00:10:00
 #SBATCH --mem=1G
