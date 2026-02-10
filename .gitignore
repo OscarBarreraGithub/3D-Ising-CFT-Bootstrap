@@ -49,6 +49,7 @@ htmlcov/
 data/
 figures/
 *.log
+tools/*.sif
 
 # Claude Code local settings
 .claude/settings.local.json

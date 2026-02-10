@@ -44,7 +44,7 @@ from ..config import (
 from ..spectrum.discretization import (
     SpectrumPoint, generate_full_spectrum,
 )
-from ..lp.solver import check_feasibility, check_feasibility_extended
+from ..lp.solver import check_feasibility
 from .stage_a import (
     binary_search_eps,
     build_full_constraint_matrix,
@@ -78,9 +78,11 @@ class StageBConfig:
     verbose: bool = False
     precompute_only: bool = False
     scale: bool = True
-    use_extended: bool = True
-    dps: int = 50
-    dps_verify: Optional[int] = 80
+    backend: str = "scipy"
+    sdpb_image: Optional[Path] = None
+    sdpb_precision: int = 1024
+    sdpb_cores: int = 4
+    sdpb_timeout: int = 600
     workers: int = 1
 
     def get_tables(self) -> List[DiscretizationTable]:
@@ -102,6 +104,20 @@ class StageBConfig:
 # Two-gap exclusion
 # =============================================================================
 
+def _make_sdpb_config_b(config: StageBConfig):
+    """Build an SdpbConfig from a StageBConfig."""
+    from ..lp.sdpb import SdpbConfig
+    kwargs = {
+        "precision": config.sdpb_precision,
+        "n_cores": config.sdpb_cores,
+        "timeout": config.sdpb_timeout,
+        "verbose": config.verbose,
+    }
+    if config.sdpb_image is not None:
+        kwargs["image_path"] = config.sdpb_image
+    return SdpbConfig(**kwargs)
+
+
 def find_eps_prime_bound(
     delta_sigma: float,
     delta_eps: float,
@@ -119,8 +135,8 @@ def find_eps_prime_bound(
     Uses the precomputed full constraint matrix A and selects rows
     based on two gap conditions:
         - Exclude scalars with Δ < Δε (below first gap)
-        - Exclude scalars with Δε ≤ Δ < Δε' (between first and second gap)
-        - Include scalars with Δ ≥ Δε' (above second gap)
+        - Exclude scalars with Δε < Δ < Δε' (between first and second gap)
+        - Include scalar at Δ = Δε if present, and scalars with Δ ≥ Δε'
         - Include all spinning operators
 
     Parameters
@@ -137,6 +153,8 @@ def find_eps_prime_bound(
         Metadata from build_full_constraint_matrix.
     config : StageBConfig
         Scan configuration.
+    full_spectrum : list of SpectrumPoint, optional
+        Unused, kept for API compatibility.
 
     Returns
     -------
@@ -145,47 +163,28 @@ def find_eps_prime_bound(
     n_iter : int
         Number of binary search iterations.
     """
-    # Epsilon anchor: nearest scalar sample at or above delta_eps within a band.
-    # This is more robust than exact float equality on a discretized grid.
-    eps_anchor_band = max(delta_eps * 1e-4, 1e-6)
-    scalars_at_eps = scalar_mask & (
-        (scalar_deltas >= delta_eps - eps_anchor_band) &
-        (scalar_deltas <= delta_eps + eps_anchor_band)
+    sdpb_cfg = _make_sdpb_config_b(config) if config.backend == "sdpb" else None
+
+    # Scalars at exactly Δε are allowed (boundary point of the first gap).
+    scalar_at_eps = scalar_mask & np.isclose(
+        scalar_deltas, delta_eps, atol=1e-10, rtol=0.0
     )
-    # If no sample falls in the band, take the nearest scalar at or above delta_eps
-    if not np.any(scalars_at_eps):
-        above_eps = scalar_mask & (scalar_deltas >= delta_eps - 1e-10)
-        if np.any(above_eps):
-            above_deltas = scalar_deltas[above_eps]
-            closest_idx = np.argmin(np.abs(above_deltas - delta_eps))
-            nearest_delta = above_deltas[closest_idx]
-            scalars_at_eps = scalar_mask & (
-                np.abs(scalar_deltas - nearest_delta) < 1e-10
-            )
 
     def is_excluded(eps_prime_trial: float) -> bool:
-        # Include: spinning + scalar at Δε (epsilon anchor) + scalars at or above Δε'
-        # Exclude: scalars below Δε and scalars between Δε and Δε'
+        # Include: spinning + scalar exactly at Δε + scalars at or above Δε'.
+        # This enforces no scalars below Δε and no scalars in (Δε, Δε').
         scalars_above_eps_prime = scalar_mask & (
             scalar_deltas >= eps_prime_trial - 1e-10
         )
-        mask = spinning_mask | scalars_at_eps | scalars_above_eps_prime
+        mask = spinning_mask | scalar_at_eps | scalars_above_eps_prime
         A_sub = A[mask]
         if A_sub.shape[0] == 0:
             return True
-
-        if config.use_extended and full_spectrum is not None:
-            mask_indices = np.where(mask)[0]
-            spectrum_sub = [full_spectrum[i] for i in mask_indices]
-            result = check_feasibility_extended(
-                A_sub, f_id, spectrum_sub, delta_sigma,
-                n_max=config.n_max, dps=config.dps,
-                dps_verify=config.dps_verify, verbose=False,
-            )
-            return result.excluded if result.excluded is not None else False
-        else:
-            result = check_feasibility(A_sub, f_id, scale=config.scale)
-            return result.excluded
+        result = check_feasibility(
+            A_sub, f_id, scale=config.scale,
+            backend=config.backend, sdpb_config=sdpb_cfg,
+        )
+        return result.excluded
 
     # Search range: just above Δε to the upper bound
     lo = delta_eps
@@ -460,6 +459,23 @@ def main():
         "--workers", type=int, default=1,
         help="Number of parallel workers for precomputation (default: 1)"
     )
+    parser.add_argument(
+        "--backend", type=str, default="sdpb",
+        choices=["scipy", "sdpb"],
+        help="LP solver backend (default: sdpb)"
+    )
+    parser.add_argument(
+        "--sdpb-image", type=str, default=None,
+        help="Path to SDPB Singularity .sif image"
+    )
+    parser.add_argument(
+        "--sdpb-precision", type=int, default=1024,
+        help="SDPB arithmetic precision in bits (default: 1024)"
+    )
+    parser.add_argument(
+        "--sdpb-cores", type=int, default=4,
+        help="Number of MPI cores for SDPB (default: 4)"
+    )
 
     args = parser.parse_args()
 
@@ -475,6 +491,10 @@ def main():
         verbose=args.verbose,
         precompute_only=args.precompute_only,
         workers=args.workers,
+        backend=args.backend,
+        sdpb_image=Path(args.sdpb_image) if args.sdpb_image else None,
+        sdpb_precision=args.sdpb_precision,
+        sdpb_cores=args.sdpb_cores,
     )
 
     if config.precompute_only:

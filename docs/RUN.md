@@ -1,358 +1,134 @@
 # Running the 3D Ising Bootstrap Pipeline
 
-This document explains how to run the full pipeline to reproduce Figure 6 of arXiv:1203.6064.
+How to run the full pipeline to reproduce Figure 6 of arXiv:1203.6064.
 
 ---
 
 ## Prerequisites
 
-### Python Environment
 ```bash
-# Create virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install package
-pip install -e .
-```
-
-### Verify Installation
-```bash
+# Conda environment
+conda activate ising_bootstrap
 python -c "from ising_bootstrap import config; print(f'n_max = {config.N_MAX}')"
 # Should print: n_max = 10
 ```
 
----
-
-## Quick Test (5-10 minutes)
-
-Run a fast test with reduced discretization to verify the pipeline works:
-
-```bash
-# Stage A (reduced, ~2 min)
-python -m ising_bootstrap.scans.stage_a \
-    --sigma-min 0.51 --sigma-max 0.53 --sigma-step 0.005 \
-    --reduced \
-    --output data/eps_bound_test.csv
-
-# Stage B (reduced, ~3 min)
-python -m ising_bootstrap.scans.stage_b \
-    --eps-bound data/eps_bound_test.csv \
-    --reduced \
-    --output data/epsprime_bound_test.csv
-
-# Quick plot
-python -m ising_bootstrap.plot.fig6 \
-    --data data/epsprime_bound_test.csv \
-    --output figures/fig6_test.png
-```
+SDPB backend (required for production n_max=10 runs):
+- Singularity container at `tools/sdpb-3.1.0.sif`
+- Pull with: `singularity pull tools/sdpb-3.1.0.sif docker://bootstrapcollaboration/sdpb:3.1.0`
 
 ---
 
-## Full Production Run
+## Pipeline Overview
 
-### Overview
+| Stage | Description | Backend | Output |
+|-------|-------------|---------|--------|
+| Precompute | Block derivatives for ~520K operators | CPU only | `data/cached_blocks/ext_*.npy` |
+| Stage A | Upper bound on Delta_epsilon(Delta_sigma) | SDPB | `data/eps_bound.csv` |
+| Stage B | Upper bound on Delta_epsilon'(Delta_sigma) | SDPB | `data/epsprime_bound.csv` |
+| Plot | Generate Figure 6 | matplotlib | `figures/fig6_reproduction.png` |
 
-| Stage | Description | Estimated Time | Output |
-|-------|-------------|----------------|--------|
-| A | Compute Δε_max(Δσ) | 2-4 hours | data/eps_bound.csv |
-| B | Compute Δε'_max(Δσ) | 4-8 hours | data/epsprime_bound.csv |
-| Plot | Generate figure | < 1 minute | figures/fig6_reproduction.png |
-
-Times are estimates for a modern laptop (M1/M2 Mac or recent Intel i7/i9).
-
-### Stage A: Δε Bound
-
-This computes the upper bound on the first Z2-even scalar dimension Δε as a function of Δσ.
-
-```bash
-python -m ising_bootstrap.scans.stage_a \
-    --sigma-min 0.50 \
-    --sigma-max 0.60 \
-    --sigma-step 0.002 \
-    --tolerance 1e-4 \
-    --output data/eps_bound.csv \
-    --verbose
-```
-
-**Options:**
-- `--sigma-min`, `--sigma-max`: Range of Δσ values (paper uses 0.50 to 0.60)
-- `--sigma-step`: Grid spacing (0.002 gives 51 points)
-- `--tolerance`: Binary search tolerance for Δε (1e-4 is usually sufficient)
-- `--reduced`: Use reduced discretization (T1-T2 only) for faster but less accurate run
-- `--verbose`: Print progress information
-
-**Output format** (data/eps_bound.csv):
-```csv
-delta_sigma,delta_eps_max
-0.500,1.0234
-0.502,1.0312
-...
-```
-
-### Stage B: Δε' Bound
-
-This computes the upper bound on Δε' given that Δε is set to its maximal allowed value.
-
-```bash
-python -m ising_bootstrap.scans.stage_b \
-    --eps-bound data/eps_bound.csv \
-    --sigma-min 0.50 \
-    --sigma-max 0.60 \
-    --tolerance 1e-3 \
-    --output data/epsprime_bound.csv \
-    --verbose
-```
-
-**Options:**
-- `--eps-bound`: Path to Stage A output (required)
-- `--tolerance`: Binary search tolerance for Δε' (1e-3 is usually sufficient)
-- Other options same as Stage A
-
-**Output format** (data/epsprime_bound.csv):
-```csv
-delta_sigma,delta_eps,delta_eps_prime_max
-0.500,1.0234,2.567
-0.502,1.0312,2.589
-...
-```
-
-### Plot Generation
-
-```bash
-python -m ising_bootstrap.plot.fig6 \
-    --data data/epsprime_bound.csv \
-    --output figures/fig6_reproduction.png \
-    --dpi 300
-```
-
-**Options:**
-- `--data`: Path to Stage B output
-- `--output`: Output file path (supports .png and .pdf)
-- `--dpi`: Resolution for PNG output (default 300)
-- `--show`: Display plot interactively before saving
-
----
-
-## Validation Checks
-
-### Expected Results
-
-At the Ising point (Δσ ≈ 0.5182):
-- **Δε_max** ≈ 1.41 (from Stage A)
-- **Δε'_max** ≈ 3.84 (from Stage B)
-
-### Sanity Check Script
-
-```bash
-python -m ising_bootstrap.validate \
-    --eps-bound data/eps_bound.csv \
-    --epsprime-bound data/epsprime_bound.csv
-```
-
-This will print:
-```
-=== Validation Results ===
-
-Stage A (Δε bound):
-  At Δσ = 0.518: Δε_max = 1.412  (expected ~1.41) ✓
-
-Stage B (Δε' bound):
-  At Δσ = 0.518: Δε'_max = 3.842  (expected ~3.84) ✓
-
-Qualitative checks:
-  [✓] Spike feature present below Ising Δσ
-  [✓] Δε' bound increases for Δσ > 0.52
-  [✓] Δε' bound diverges near Δσ = 0.50
-```
+**Important:** The scipy/HiGHS LP backend fails at n_max=10 due to float64 conditioning
+(condition number ~4e16). Production runs **must** use `--backend sdpb`. See
+`docs/LP_CONDITIONING_BUG.md` for details.
 
 ---
 
 ## SLURM Pipeline (FASRC Cannon)
 
-The full pipeline runs unattended via SLURM dependency chains. Each step waits
-for the previous one to complete before starting.
-
-### One-command submission
+### Stage A with SDPB
 
 ```bash
-# Submit everything with automatic dependencies:
-PRECOMPUTE=$(sbatch --parsable jobs/precompute_array.slurm)
-STAGE_A=$(sbatch --dependency=afterok:${PRECOMPUTE} --parsable jobs/stage_a.slurm)
-MERGE_A=$(sbatch --dependency=afterok:${STAGE_A} --parsable jobs/merge_stage_a_job.slurm)
-STAGE_B=$(sbatch --dependency=afterok:${MERGE_A} --parsable jobs/stage_b.slurm)
-FINAL=$(sbatch --dependency=afterok:${STAGE_B} --parsable jobs/final_merge_and_plot.slurm)
-
-echo "Pipeline submitted: $PRECOMPUTE -> $STAGE_A -> $MERGE_A -> $STAGE_B -> $FINAL"
+# Submit 51-task array job (one per Delta_sigma point)
+sbatch jobs/stage_a_sdpb.slurm
 ```
 
-### Pipeline stages
+Each task runs binary search for Delta_epsilon bound at one Delta_sigma value,
+using SDPB with 1024-bit precision and 8 MPI cores.
 
-| Step | Job Script | Tasks | Time | Output |
-|------|-----------|-------|------|--------|
-| 1. Precompute | `jobs/precompute_array.slurm` | 10 shards x 8 CPUs | ~9h | `data/cached_blocks/ext_*.npy` |
-| 2. Stage A | `jobs/stage_a.slurm` | 51 array tasks | ~1h | `data/eps_bound_*.csv` |
-| 3. Merge A | `jobs/merge_stage_a_job.slurm` | 1 task | <1 min | `data/eps_bound.csv` |
-| 4. Stage B | `jobs/stage_b.slurm` | 51 array tasks | ~1h | `data/epsprime_bound_*.csv` |
-| 5. Final | `jobs/final_merge_and_plot.slurm` | 1 task | <1 min | `figures/fig6_reproduction.png` |
-
-Total wall time: ~12-13 hours (steps run sequentially via dependencies).
-
-### Monitoring
+### Merge Stage A results
 
 ```bash
-squeue -u $USER                          # Check queue status
-sacct -j <JOBID> --format=JobID,State    # Check completed job status
-tail -f logs/precompute_*_*.log          # Watch precompute progress
-ls data/cached_blocks/ | wc -l           # Count cached operators (target: 520476)
+bash jobs/merge_stage_a.sh
+# Creates data/eps_bound.csv
 ```
 
-### Recovery
+### Stage B with SDPB
 
-If any step fails, resubmit from that point:
 ```bash
-# Check which precompute shards need rerunning
-for i in 0 1 2 3 4; do echo "Shard $i: $(grep -c 'complete' logs/precompute_*_${i}.log 2>/dev/null || echo 'incomplete')"; done
-
-# Resubmit remaining pipeline from Stage A onward
-STAGE_A=$(sbatch --parsable jobs/stage_a.slurm)
-MERGE_A=$(sbatch --dependency=afterok:${STAGE_A} --parsable jobs/merge_stage_a_job.slurm)
-STAGE_B=$(sbatch --dependency=afterok:${MERGE_A} --parsable jobs/stage_b.slurm)
-FINAL=$(sbatch --dependency=afterok:${STAGE_B} --parsable jobs/final_merge_and_plot.slurm)
+sbatch jobs/stage_b_sdpb.slurm
 ```
 
-### SLURM scripts reference
+### Merge and plot
 
-| Script | Purpose |
-|--------|---------|
-| `jobs/precompute_array.slurm` | 10-shard array job, precomputes 520K block derivatives |
-| `jobs/precompute.slurm` | Single-job precompute (24h, for non-sharded use) |
-| `jobs/stage_a.slurm` | 51-task array, one per Δσ point |
-| `jobs/merge_stage_a.sh` | Bash script to merge Stage A CSVs |
-| `jobs/merge_stage_a_job.slurm` | SLURM wrapper for merge_stage_a.sh (for dependency chains) |
-| `jobs/stage_b.slurm` | 51-task array, one per Δσ point |
-| `jobs/merge_stage_b.sh` | Bash script to merge Stage B CSVs |
-| `jobs/final_merge_and_plot.slurm` | Merges Stage B + generates Figure 6 |
+```bash
+bash jobs/merge_stage_b.sh
+python -m ising_bootstrap.plot.fig6 \
+    --data data/epsprime_bound.csv \
+    --output figures/fig6_reproduction.png
+```
 
 ---
 
-## Parallelization (non-SLURM)
+## Local / Interactive Runs
 
-Grid points are independent, so the scans can be parallelized on any machine.
+### Quick test (scipy backend, low n_max)
 
-### Manual splitting
-
-Run different Δσ ranges on different machines:
 ```bash
-# Machine 1
 python -m ising_bootstrap.scans.stage_a \
-    --sigma-min 0.50 --sigma-max 0.55 --sigma-step 0.002 \
-    --output data/eps_bound_1.csv
-
-# Machine 2
-python -m ising_bootstrap.scans.stage_a \
-    --sigma-min 0.55 --sigma-max 0.60 --sigma-step 0.002 \
-    --output data/eps_bound_2.csv
-
-# Merge results
-cat data/eps_bound_1.csv > data/eps_bound.csv
-tail -n +2 data/eps_bound_2.csv >> data/eps_bound.csv
+    --sigma-min 0.51 --sigma-max 0.53 --sigma-step 0.005 \
+    --reduced --output data/eps_bound_test.csv --verbose
 ```
 
----
+### Single-point SDPB test (on a compute node)
 
-## Troubleshooting
-
-### LP Solver Issues
-
-**Problem**: LP returns "infeasible" when it should be feasible
-
-**Solutions**:
-1. Increase LP tolerance: `--lp-tolerance 1e-6`
-2. Check constraint scaling
-3. Verify discretization matches Table 2 exactly
-
-### Numerical Precision Issues
-
-**Problem**: Results vary significantly between runs
-
-**Solutions**:
-1. Increase mpmath precision: `--precision 80`
-2. Use smaller binary search tolerance
-3. Check for overflow in block computation
-
-### Memory Issues
-
-**Problem**: Out of memory with full discretization
-
-**Solutions**:
-1. Use `--reduced` flag for testing
-2. Process in batches
-3. Use sparse matrix representation for constraints
-
-### Slow Performance
-
-**Problem**: Stage A/B taking much longer than expected
-
-**Solutions**:
-1. Use `--reduced` for initial testing
-2. Enable caching: `--cache-dir data/cached_blocks/`
-3. Use parallelization
-4. Profile with `--profile` flag to identify bottleneck
-
----
-
-## Output Files Reference
-
-```
-data/
-├── cached_blocks/           # Precomputed block derivatives
-│   ├── block_0.5_0.npy     # G derivatives for (Δ,l)=(0.5,0)
-│   └── ...
-├── eps_bound.csv            # Stage A output
-├── epsprime_bound.csv       # Stage B output
-└── eps_bound_test.csv       # Test run output
-
-figures/
-├── fig6_reproduction.png    # Main result
-└── fig6_test.png            # Test run figure
-```
-
----
-
-## Configuration Options
-
-All parameters can also be set in a config file:
-
-```yaml
-# config.yaml
-dimension: 3
-n_max: 10
-sigma_range: [0.50, 0.60]
-sigma_step: 0.002
-eps_tolerance: 1e-4
-epsprime_tolerance: 1e-3
-use_reduced_discretization: false
-cache_dir: "data/cached_blocks/"
-lp_solver: "highs-ds"
-lp_tolerance: 1e-7
-mpmath_precision: 50
-```
-
-Then run:
 ```bash
-python -m ising_bootstrap.scans.stage_a --config config.yaml
+salloc -p test --account=iaifi_lab -c 4 -t 01:00:00 --mem=8G
+
+python -m ising_bootstrap.scans.stage_a \
+    --sigma-min 0.518 --sigma-max 0.518 --sigma-step 1.0 \
+    --backend sdpb --sdpb-cores 4 --tolerance 1e-4 \
+    --output data/eps_bound_test.csv --verbose
 ```
 
 ---
 
-## Reproducing Paper Results Exactly
+## CLI Options
 
-To match the paper's Fig. 6 as closely as possible:
+Both `stage_a` and `stage_b` accept:
 
-1. **Use full discretization** (T1-T5 from Table 2)
-2. **Use n_max=10** (default)
-3. **Use fine Δσ grid**: step of 0.001 or smaller near the spike
-4. **Use tight tolerances**: 1e-4 for Δε, 1e-3 for Δε'
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sigma-min` | 0.50 | Start of Delta_sigma grid |
+| `--sigma-max` | 0.60 | End of Delta_sigma grid |
+| `--sigma-step` | 0.002 | Grid spacing |
+| `--tolerance` | 1e-4 | Binary search tolerance |
+| `--backend` | scipy | LP backend: `scipy` or `sdpb` |
+| `--sdpb-image` | tools/sdpb-3.1.0.sif | Path to SDPB Singularity image |
+| `--sdpb-precision` | 1024 | SDPB arithmetic precision in bits |
+| `--sdpb-cores` | 4 | MPI cores for SDPB |
+| `--reduced` | false | Use T1-T2 only (faster, less accurate) |
+| `--output` | - | Output CSV path |
+| `--verbose` | false | Print progress |
 
-Note: The paper used CPLEX; we use HiGHS. Results should be nearly identical but may differ at the 4th decimal place due to different LP implementations.
+Stage B additionally requires `--eps-bound <path>` pointing to Stage A output.
+
+---
+
+## Monitoring
+
+```bash
+squeue -u $USER                              # Check queue
+tail -f logs/stage_a_sdpb_<JOBID>_<TASK>.log # Watch a task
+./jobs/check_usage.sh <JOBID>                # Post-job resource usage
+```
+
+---
+
+## Validation Targets
+
+| Check | Expected |
+|-------|----------|
+| Delta_epsilon_max at Delta_sigma ~ 0.518 | ~1.41 |
+| Delta_epsilon'_max at Delta_sigma ~ 0.518 | ~3.84 |
+| Spike feature below Ising Delta_sigma | Present |

@@ -169,9 +169,14 @@ At Δσ ≈ 0.5182, verify:
 
 ## LP Solver Choice
 
-### Decision: SciPy HiGHS
+### Decision: SDPB (production) + SciPy HiGHS (testing)
 
-The paper used CPLEX (commercial). For an open-source implementation, we use **SciPy's linprog with HiGHS backend**.
+The paper used CPLEX (commercial). We initially used SciPy's linprog with HiGHS backend,
+but this fails at n_max=10 due to float64 conditioning (condition number ~4e16).
+Production runs now use **SDPB** (arXiv:1502.02033), the standard arbitrary-precision
+solver for conformal bootstrap. See `docs/LP_CONDITIONING_BUG.md` for the full story.
+
+SciPy HiGHS is retained as the default backend for unit tests at low n_max.
 
 ### Rationale
 1. **Built into SciPy** - no additional installation

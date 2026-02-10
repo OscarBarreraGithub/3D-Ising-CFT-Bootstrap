@@ -119,12 +119,43 @@ def scale_constraints(
     return A_s, f_id_s, row_scale, col_scale
 
 
+def _validate_functional(
+    alpha: np.ndarray,
+    A: np.ndarray,
+    f_id: np.ndarray,
+    tolerance: float,
+) -> Tuple[bool, float, float]:
+    """
+    Validate a candidate functional against the original unscaled constraints.
+
+    Returns
+    -------
+    is_valid : bool
+        True if normalization and positivity hold within tolerance.
+    eq_residual : float
+        alpha^T f_id - 1.
+    min_ineq : float
+        Minimum value of alpha^T f_i across operator rows.
+    """
+    if alpha is None or not np.all(np.isfinite(alpha)):
+        return False, np.inf, -np.inf
+
+    eq_residual = float(np.dot(alpha, f_id) - 1.0)
+    min_ineq = float(np.min(A @ alpha)) if A.size > 0 else np.inf
+
+    check_tol = max(10.0 * tolerance, 1e-9)
+    is_valid = (abs(eq_residual) <= check_tol) and (min_ineq >= -check_tol)
+    return is_valid, eq_residual, min_ineq
+
+
 def check_feasibility(
     A: np.ndarray,
     f_id: np.ndarray,
     tolerance: float = LP_TOLERANCE,
     scale: bool = True,
     method: str = "highs",
+    backend: str = "scipy",
+    sdpb_config=None,
 ) -> FeasibilityResult:
     """
     Check bootstrap feasibility using linear programming.
@@ -148,12 +179,20 @@ def check_feasibility(
         If True, apply row/column scaling before solving.
     method : str
         LP solver method (default "highs").
+    backend : str
+        Solver backend: "scipy" (default) or "sdpb".
+    sdpb_config : SdpbConfig, optional
+        Configuration for the SDPB backend (required when backend="sdpb").
 
     Returns
     -------
     FeasibilityResult
         Result indicating whether the spectrum is excluded.
     """
+    if backend == "sdpb":
+        from .sdpb import check_feasibility_sdpb, SdpbConfig
+        cfg = sdpb_config if sdpb_config is not None else SdpbConfig()
+        return check_feasibility_sdpb(A, f_id, cfg)
     n_operators, n_vars = A.shape
 
     if scale:
@@ -191,6 +230,33 @@ def check_feasibility(
         # LP feasible → spectrum EXCLUDED
         # Unscale the solution
         alpha = res.x / col_scale if scale else res.x
+
+        # Validate the functional against the original (unscaled) constraints.
+        # This catches false "feasible" results from numerical conditioning.
+        is_valid, eq_residual, min_ineq = _validate_functional(
+            alpha, A, f_id, tolerance
+        )
+        if not is_valid:
+            if scale:
+                # Retry without scaling before declaring "allowed".
+                fallback = check_feasibility(
+                    A, f_id, tolerance=tolerance, scale=False, method=method,
+                    backend="scipy",
+                )
+                if fallback.excluded:
+                    return fallback
+            return FeasibilityResult(
+                excluded=False,
+                status=(
+                    "LP reported feasible but failed certificate validation; "
+                    f"|alpha·f_id-1|={abs(eq_residual):.3e}, "
+                    f"min(alpha·f_i)={min_ineq:.3e}"
+                ),
+                lp_status=4,
+                alpha=None,
+                fun=None,
+            )
+
         return FeasibilityResult(
             excluded=True,
             status="Spectrum excluded (functional found)",
@@ -294,7 +360,8 @@ def solve_bootstrap(
         print(f"Identity norm: {np.linalg.norm(f_id):.6e}")
 
     # Solve LP
-    result = check_feasibility(A, f_id, tolerance=tolerance, scale=scale)
+    result = check_feasibility(A, f_id, tolerance=tolerance, scale=scale,
+                               backend="scipy")
 
     if verbose:
         print(f"Result: {result.status}")

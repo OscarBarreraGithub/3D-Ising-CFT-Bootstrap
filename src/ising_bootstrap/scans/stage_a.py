@@ -49,7 +49,7 @@ from ..lp.constraint_matrix import (
     build_constraint_matrix_from_cache,
     precompute_extended_blocks,
 )
-from ..lp.solver import check_feasibility, check_feasibility_extended, FeasibilityResult
+from ..lp.solver import check_feasibility, FeasibilityResult
 from ..blocks.cache import (
     extended_cache_exists,
     list_extended_cache_filenames,
@@ -80,9 +80,11 @@ class ScanConfig:
     verbose: bool = False
     precompute_only: bool = False
     scale: bool = True
-    use_extended: bool = True
-    dps: int = 50
-    dps_verify: Optional[int] = 80
+    backend: str = "scipy"
+    sdpb_image: Optional[Path] = None
+    sdpb_precision: int = 1024
+    sdpb_cores: int = 4
+    sdpb_timeout: int = 600
     workers: int = 1
     shard_id: Optional[int] = None
     num_shards: Optional[int] = None
@@ -216,6 +218,20 @@ def build_full_constraint_matrix(
 # Find epsilon bound at a single delta_sigma
 # =============================================================================
 
+def _make_sdpb_config(config: ScanConfig):
+    """Build an SdpbConfig from a ScanConfig."""
+    from ..lp.sdpb import SdpbConfig
+    kwargs = {
+        "precision": config.sdpb_precision,
+        "n_cores": config.sdpb_cores,
+        "timeout": config.sdpb_timeout,
+        "verbose": config.verbose,
+    }
+    if config.sdpb_image is not None:
+        kwargs["image_path"] = config.sdpb_image
+    return SdpbConfig(**kwargs)
+
+
 def find_eps_bound(
     delta_sigma: float,
     A: np.ndarray,
@@ -245,7 +261,7 @@ def find_eps_bound(
     config : ScanConfig
         Scan configuration.
     full_spectrum : list of SpectrumPoint, optional
-        Full spectrum (required when use_extended=True).
+        Full spectrum (unused, kept for API compatibility).
 
     Returns
     -------
@@ -254,34 +270,19 @@ def find_eps_bound(
     n_iter : int
         Number of binary search iterations.
     """
-    active_hint = None  # warm-start cache across binary search
+    sdpb_cfg = _make_sdpb_config(config) if config.backend == "sdpb" else None
 
     def is_excluded(gap: float) -> bool:
-        nonlocal active_hint
         # Select rows: all spinning operators + scalars with Δ >= gap
         mask = spinning_mask | (scalar_mask & (scalar_deltas >= gap - 1e-10))
         A_sub = A[mask]
         if A_sub.shape[0] == 0:
             return True
-
-        if config.use_extended and full_spectrum is not None:
-            # Map mask indices back to full spectrum indices
-            mask_indices = np.where(mask)[0]
-            spectrum_sub = [full_spectrum[i] for i in mask_indices]
-            result = check_feasibility_extended(
-                A_sub, f_id, spectrum_sub, delta_sigma,
-                n_max=config.n_max, dps=config.dps,
-                dps_verify=config.dps_verify,
-                active_hint=active_hint,
-                verbose=False,
-            )
-            # Cache active set for warm-starting next binary search step
-            # (indices are relative to A_sub, need to map back if we want
-            # cross-gap warm starting, but for now just pass None)
-            return result.excluded if result.excluded is not None else False
-        else:
-            result = check_feasibility(A_sub, f_id, scale=config.scale)
-            return result.excluded
+        result = check_feasibility(
+            A_sub, f_id, scale=config.scale,
+            backend=config.backend, sdpb_config=sdpb_cfg,
+        )
+        return result.excluded
 
     return binary_search_eps(
         is_excluded,
@@ -591,6 +592,23 @@ def main():
         "--num-shards", type=int, default=None,
         help="Total number of shards for parallel precomputation"
     )
+    parser.add_argument(
+        "--backend", type=str, default="sdpb",
+        choices=["scipy", "sdpb"],
+        help="LP solver backend (default: sdpb)"
+    )
+    parser.add_argument(
+        "--sdpb-image", type=str, default=None,
+        help="Path to SDPB Singularity .sif image"
+    )
+    parser.add_argument(
+        "--sdpb-precision", type=int, default=1024,
+        help="SDPB arithmetic precision in bits (default: 1024)"
+    )
+    parser.add_argument(
+        "--sdpb-cores", type=int, default=4,
+        help="Number of MPI cores for SDPB (default: 4)"
+    )
 
     args = parser.parse_args()
 
@@ -607,6 +625,10 @@ def main():
         workers=args.workers,
         shard_id=args.shard_id,
         num_shards=args.num_shards,
+        backend=args.backend,
+        sdpb_image=Path(args.sdpb_image) if args.sdpb_image else None,
+        sdpb_precision=args.sdpb_precision,
+        sdpb_cores=args.sdpb_cores,
     )
 
     if config.precompute_only:

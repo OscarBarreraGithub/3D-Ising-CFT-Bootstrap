@@ -2,8 +2,8 @@
 
 Tracking document for reproducing Figure 6 from arXiv:1203.6064.
 
-**Last updated:** 2026-02-04
-**Test suite:** 302/302 passing (~50s)
+**Last updated:** 2026-02-09
+**Test suite:** 308+ tests passing
 
 ---
 
@@ -18,6 +18,7 @@ Tracking document for reproducing Figure 6 from arXiv:1203.6064.
 | 4 | Stage A scan (Delta_epsilon) | DONE | 590 | 428 | 27 |
 | 5 | Stage B scan (Delta_epsilon') | DONE | 456 | 510 | 25 |
 | 6 | Plotting & validation | DONE | ~207 | 0 | 0 |
+| 7 | SDPB integration (LP fix) | DONE | ~420 | ~250 | 17 |
 
 ---
 
@@ -792,9 +793,15 @@ No new tests were added for the plotting module. Verification was performed manu
 
 ## Production Run Status
 
+### SDPB Stage A (Current)
+
+**Status**: Running (Job 59675873, 51 array tasks, 8 CPUs / 16 GB each)
+**Backend**: SDPB 3.1.0 via Singularity (`tools/sdpb-3.1.0.sif`), 1024-bit precision
+**Expected**: Non-trivial Delta_epsilon_max curve (not all 0.5 like the scipy run)
+
 ### Block Precomputation
 
-**Status**: In progress (425,429 / 520,476 cached, 81.7%)
+**Status**: Complete (520K .npy files cached)
 
 **Job History**:
 - Job 58613547 (single-node `precompute.slurm`): Cached ~60,851 operators before timeout.
@@ -858,7 +865,8 @@ src/ising_bootstrap/
     __init__.py                       61 lines   Public API exports
     crossing.py                      331 lines   Eq. 2.6, Leibniz rule
     constraint_matrix.py             218 lines   Matrix assembly
-    solver.py                        302 lines   LP feasibility (HiGHS)
+    solver.py                        ~370 lines  LP feasibility (HiGHS + SDPB backend)
+    sdpb.py                          ~420 lines  SDPB integration (PMP writer, solver, wrapper)
 
   scans/
     __init__.py                       42 lines   Public API exports (Stage A + B)
@@ -892,6 +900,7 @@ tests/
     __init__.py                        0 lines
     test_crossing.py                 396 lines   36 tests (35 fast + 1 slow)
     test_solver.py                   354 lines   21 tests (19 fast + 2 slow)
+    test_sdpb.py                     ~250 lines  17 tests (PMP writer, output interp, e2e)
 
   test_scans/
     __init__.py                        1 line
@@ -923,14 +932,19 @@ tests/
    numerical differentiation (mpmath.diff) to relative error < 1e-8. Prefactor
    and identity derivatives are similarly cross-checked.
 
-5. **LP at low n_max with coarse discretization**: At n_max=2 (6 index pairs)
-   with coarse operator grids, the LP may spuriously exclude unconstrained
-   spectra. This is because the coarse grid misses operators whose crossing
-   vectors would violate a putative functional. The physical correctness of
-   the bootstrap bounds requires n_max >= ~10 and the fine discretization
-   from Table 2 (production scans).
+5. **LP conditioning at n_max=10 (FIXED)**: The scipy/HiGHS float64 LP solver
+   cannot handle the constraint matrix condition number (~4e16 at n_max=10).
+   This caused all Stage A results to be 0.5 (wrong). **Fixed by integrating
+   SDPB** (arbitrary-precision SDP solver) as the LP backend. See
+   `docs/LP_CONDITIONING_BUG.md` for full diagnosis. The scipy backend is
+   retained as a fallback for testing at low n_max.
 
-6. **Expected validation targets** (from paper):
+6. **SDPB requires Singularity**: The SDPB backend requires a Singularity
+   container image (`tools/sdpb-3.1.0.sif`, ~300 MB). Only available on
+   compute nodes with Singularity installed. Use `--backend scipy` on
+   systems without it (with the caveat that scipy fails at n_max=10).
+
+7. **Expected validation targets** (from paper):
    - At Delta_sigma ~ 0.5182: Delta_epsilon_max ~ 1.41
    - At Delta_sigma ~ 0.5182: Delta_epsilon'_max ~ 3.84
    - Sharp spike in Delta_epsilon' bound below Ising Delta_sigma

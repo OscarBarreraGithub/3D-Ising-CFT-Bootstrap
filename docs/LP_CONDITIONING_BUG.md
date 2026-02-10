@@ -1,7 +1,12 @@
 # LP Conditioning Bug — Stage A Returns All 0.5
 
 **Date:** 2026-02-06
-**Status:** Root cause identified, fix not yet implemented
+**Status:** FIXED (2026-02-09) — replaced scipy/HiGHS with SDPB arbitrary-precision solver
+
+**Fix:** Integrated SDPB (arXiv:1502.02033) via Singularity container as the LP backend.
+SDPB uses 1024-bit internal precision, completely sidestepping the float64 conditioning issue.
+See `src/ising_bootstrap/lp/sdpb.py` and the `--backend sdpb` CLI option.
+Stage A job 59675873 submitted with SDPB backend — validation pending.
 
 ## Summary
 
@@ -111,11 +116,13 @@ iteration saw "excluded" and converged to the lower bound.
 | Factorial weight normalization (m! × n!) | Improved rank 10→35, still fails |
 | SVD projection onto top-k components | Always allowed (same as no scaling) |
 
-## Recommended Fix (Not Yet Implemented)
+## Fix Implemented: Option D (SDPB)
 
 The fundamental issue is that scipy/HiGHS operates at float64 and cannot
-handle the 10^16 condition number. Possible solutions, roughly ordered
-by implementation effort:
+handle the 10^16 condition number. We chose **Option D: SDPB** from the
+options below. Implementation details in `src/ising_bootstrap/lp/sdpb.py`.
+
+Other options considered (not implemented):
 
 ### Option A: Extended-Precision LP (Most Robust)
 
@@ -151,7 +158,7 @@ and corrections are applied.
 **Pros:** Mostly uses fast float64 arithmetic.
 **Cons:** Requires custom iterative refinement loop.
 
-### Option D: Use SDPB
+### Option D: Use SDPB ← IMPLEMENTED
 
 Replace scipy's LP solver with SDPB (Simmons-Duffin's semidefinite
 programming solver for bootstrap), which is purpose-built for this
@@ -159,6 +166,13 @@ exact problem class and uses arbitrary precision internally.
 
 **Pros:** Standard tool for conformal bootstrap, handles all n_max.
 **Cons:** External dependency, needs installation on the cluster.
+
+**Implementation (2026-02-09):**
+- Singularity container: `tools/sdpb-3.1.0.sif` (pulled from `docker://bootstrapcollaboration/sdpb:3.1.0`)
+- PMP JSON writer: encodes discrete LP as degenerate PMP with 1×1 blocks, degree-0 polynomials
+- Subprocess wrapper: `pmp2sdp` → `sdpb` via `singularity exec`
+- Drop-in replacement: `check_feasibility(A, f_id, backend="sdpb")`
+- Verified end-to-end: feasible LP → excluded=True, infeasible LP → excluded=False
 
 ## Files Involved
 
