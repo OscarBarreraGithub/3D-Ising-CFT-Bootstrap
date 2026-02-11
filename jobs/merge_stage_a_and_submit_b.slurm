@@ -39,13 +39,66 @@ if [ "$n_rows" -lt 10 ]; then
     exit 1
 fi
 
-# Quick sanity check: are all values 0.5 (the known bad result)?
-n_bad=$(tail -n +2 data/eps_bound.csv | awk -F',' '$2 < 0.51 {count++} END {print count+0}')
-if [ "$n_bad" -eq "$n_rows" ]; then
-    echo "ERROR: All Stage A results are ≤ 0.5 (unitarity floor). Solver is still broken."
+eval "$(python - <<'PY'
+import csv
+import math
+
+rows = 0
+valid = 0
+nonfinite = 0
+near_lower = 0
+near_upper = 0
+
+with open("data/eps_bound.csv", "r", newline="") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        rows += 1
+        try:
+            value = float(row["delta_eps_max"])
+        except (ValueError, KeyError):
+            nonfinite += 1
+            continue
+
+        if not math.isfinite(value):
+            nonfinite += 1
+            continue
+
+        valid += 1
+        if value < 0.51:
+            near_lower += 1
+        if value > 2.49:
+            near_upper += 1
+
+print(f"VALID_ROWS={valid}")
+print(f"NONFINITE_ROWS={nonfinite}")
+print(f"LOWER_ROWS={near_lower}")
+print(f"UPPER_ROWS={near_upper}")
+PY
+)"
+
+echo "Validation summary: valid=${VALID_ROWS}, nonfinite=${NONFINITE_ROWS}, lower=${LOWER_ROWS}, upper=${UPPER_ROWS}"
+
+if [ "${VALID_ROWS}" -lt 10 ]; then
+    echo "ERROR: Too few valid Stage A rows (${VALID_ROWS} < 10). Aborting pipeline."
     exit 1
 fi
-echo "Sanity check passed: ${n_bad}/${n_rows} points at unitarity floor"
+
+if [ "${NONFINITE_ROWS}" -gt 0 ]; then
+    echo "ERROR: Found ${NONFINITE_ROWS} non-finite Stage A values. Aborting pipeline."
+    exit 1
+fi
+
+if [ "${LOWER_ROWS}" -eq "${VALID_ROWS}" ]; then
+    echo "ERROR: All valid Stage A results are near the unitarity floor (~0.5). Solver is still broken."
+    exit 1
+fi
+
+if [ "${UPPER_ROWS}" -eq "${VALID_ROWS}" ]; then
+    echo "ERROR: All valid Stage A results are near the upper scan bound (~2.5). Solver is still broken."
+    exit 1
+fi
+
+echo "Stage A sanity checks passed."
 
 # --- Step 3: Submit Stage B array job ---
 echo ""

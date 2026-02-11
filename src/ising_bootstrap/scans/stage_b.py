@@ -83,6 +83,7 @@ class StageBConfig:
     sdpb_precision: int = 1024
     sdpb_cores: int = 4
     sdpb_timeout: int = 600
+    eps_snap_tolerance: float = 1e-3
     workers: int = 1
 
     def get_tables(self) -> List[DiscretizationTable]:
@@ -116,6 +117,36 @@ def _make_sdpb_config_b(config: StageBConfig):
     if config.sdpb_image is not None:
         kwargs["image_path"] = config.sdpb_image
     return SdpbConfig(**kwargs)
+
+
+def _snap_delta_eps_to_scalar_grid(
+    delta_eps: float,
+    scalar_deltas: np.ndarray,
+    scalar_mask: np.ndarray,
+    tolerance: float,
+) -> float:
+    """
+    Snap Stage A Δε to the nearest scalar grid point used by Stage B.
+
+    Raises
+    ------
+    RuntimeError
+        If no scalar points exist or nearest scalar is outside tolerance.
+    """
+    scalar_grid = scalar_deltas[scalar_mask]
+    if scalar_grid.size == 0:
+        raise RuntimeError("No scalar operators found while anchoring Δε in Stage B.")
+
+    nearest_idx = int(np.argmin(np.abs(scalar_grid - delta_eps)))
+    snapped = float(scalar_grid[nearest_idx])
+    distance = abs(snapped - delta_eps)
+    if distance > tolerance:
+        raise RuntimeError(
+            f"Cannot anchor Δε={delta_eps:.6f} to scalar grid at Δσ in Stage B. "
+            f"Nearest scalar is {snapped:.6f} (distance={distance:.3e}), "
+            f"exceeding tolerance {tolerance:.3e}."
+        )
+    return snapped
 
 
 def find_eps_prime_bound(
@@ -165,13 +196,21 @@ def find_eps_prime_bound(
     """
     sdpb_cfg = _make_sdpb_config_b(config) if config.backend == "sdpb" else None
 
-    # Scalars at exactly Δε are allowed (boundary point of the first gap).
-    scalar_at_eps = scalar_mask & np.isclose(
-        scalar_deltas, delta_eps, atol=1e-10, rtol=0.0
+    delta_eps_anchored = _snap_delta_eps_to_scalar_grid(
+        delta_eps, scalar_deltas, scalar_mask, config.eps_snap_tolerance
     )
+    scalar_at_eps = scalar_mask & np.isclose(
+        scalar_deltas, delta_eps_anchored, atol=1e-10, rtol=0.0
+    )
+    n_anchor = int(np.sum(scalar_at_eps))
+    if n_anchor != 1:
+        raise RuntimeError(
+            f"Expected exactly one anchored ε scalar at Δ={delta_eps_anchored:.6f}, "
+            f"found {n_anchor}."
+        )
 
     def is_excluded(eps_prime_trial: float) -> bool:
-        # Include: spinning + scalar exactly at Δε + scalars at or above Δε'.
+        # Include: spinning + scalar anchored at Δε + scalars at or above Δε'.
         # This enforces no scalars below Δε and no scalars in (Δε, Δε').
         scalars_above_eps_prime = scalar_mask & (
             scalar_deltas >= eps_prime_trial - 1e-10
@@ -184,10 +223,15 @@ def find_eps_prime_bound(
             A_sub, f_id, scale=config.scale,
             backend=config.backend, sdpb_config=sdpb_cfg,
         )
+        if not result.success:
+            raise RuntimeError(
+                f"Solver failed while testing Δε'={eps_prime_trial:.6f} "
+                f"at Δσ={delta_sigma:.6f}. Failure: {result.status}"
+            )
         return result.excluded
 
-    # Search range: just above Δε to the upper bound
-    lo = delta_eps
+    # Search range: just above anchored Δε to the upper bound
+    lo = delta_eps_anchored
     hi = config.eps_prime_hi
 
     return binary_search_eps(
@@ -272,7 +316,20 @@ def load_eps_bound_map(
         Mapping from delta_sigma (rounded) to delta_eps_max.
     """
     stage_a_results = load_scan_results(eps_bound_path)
-    return {round(ds, 6): de for ds, de in stage_a_results}
+    sigma_to_eps = {}
+    dropped = 0
+    for ds, de in stage_a_results:
+        if np.isfinite(de):
+            sigma_to_eps[round(ds, 6)] = de
+        else:
+            dropped += 1
+
+    if dropped > 0:
+        print(
+            f"WARNING: Dropped {dropped} non-finite Stage A values while "
+            "building Stage B input map."
+        )
+    return sigma_to_eps
 
 
 # =============================================================================
@@ -343,22 +400,34 @@ def run_scan(
         # Look up Δε from Stage A
         ds_key = round(delta_sigma, 6)
         if ds_key not in sigma_to_eps:
-            if config.verbose:
-                print(f"\n[{i+1}/{len(sigma_grid)}] Δσ = {delta_sigma:.4f} "
-                      f"— SKIPPED (no Stage A result)")
-            continue
+            raise RuntimeError(
+                f"Missing valid Stage A Δε value for Δσ={delta_sigma:.6f}. "
+                "Aborting Stage B in strict mode."
+            )
 
-        delta_eps = sigma_to_eps[ds_key]
+        delta_eps_stage_a = sigma_to_eps[ds_key]
 
         if config.verbose:
             print(f"\n[{i+1}/{len(sigma_grid)}] Δσ = {delta_sigma:.4f}, "
-                  f"Δε = {delta_eps:.6f}")
+                  f"Δε(Stage A) = {delta_eps_stage_a:.6f}")
 
         # Build full constraint matrix for this Δσ
         A, f_id, scalar_mask, scalar_deltas, spinning_mask = \
             build_full_constraint_matrix(
                 full_spectrum, delta_sigma, h_cache,
                 n_max=config.n_max, verbose=config.verbose,
+            )
+
+        delta_eps = _snap_delta_eps_to_scalar_grid(
+            delta_eps_stage_a,
+            scalar_deltas,
+            scalar_mask,
+            config.eps_snap_tolerance,
+        )
+        if config.verbose and abs(delta_eps - delta_eps_stage_a) > 0.0:
+            print(
+                f"  Anchored Δε to scalar grid: {delta_eps:.6f} "
+                f"(from {delta_eps_stage_a:.6f})"
             )
 
         # Binary search for Δε'_max
@@ -476,6 +545,14 @@ def main():
         "--sdpb-cores", type=int, default=4,
         help="Number of MPI cores for SDPB (default: 4)"
     )
+    parser.add_argument(
+        "--sdpb-timeout", type=int, default=600,
+        help="SDPB timeout in seconds (default: 600)"
+    )
+    parser.add_argument(
+        "--eps-snap-tolerance", type=float, default=1e-3,
+        help="Max |Δε_stage_a - Δε_snapped| allowed for Stage B anchoring"
+    )
 
     args = parser.parse_args()
 
@@ -495,6 +572,8 @@ def main():
         sdpb_image=Path(args.sdpb_image) if args.sdpb_image else None,
         sdpb_precision=args.sdpb_precision,
         sdpb_cores=args.sdpb_cores,
+        sdpb_timeout=args.sdpb_timeout,
+        eps_snap_tolerance=args.eps_snap_tolerance,
     )
 
     if config.precompute_only:

@@ -273,17 +273,11 @@ def find_eps_bound(
     Raises
     ------
     RuntimeError
-        If solver fails repeatedly (3+ consecutive failures).
+        If the solver fails on any binary-search iteration.
     """
     sdpb_cfg = _make_sdpb_config(config) if config.backend == "sdpb" else None
 
-    # Track failures for fail-fast logic
-    consecutive_failures = 0
-    max_consecutive_failures = 3
-
     def is_excluded(gap: float) -> bool:
-        nonlocal consecutive_failures
-
         # Select rows: all spinning operators + scalars with Δ >= gap
         mask = spinning_mask | (scalar_mask & (scalar_deltas >= gap - 1e-10))
         A_sub = A[mask]
@@ -295,24 +289,11 @@ def find_eps_bound(
             backend=config.backend, sdpb_config=sdpb_cfg,
         )
 
-        # Check if solver failed
         if not result.success:
-            consecutive_failures += 1
-
-            if consecutive_failures >= max_consecutive_failures:
-                raise RuntimeError(
-                    f"SDPB solver failed {consecutive_failures} consecutive times. "
-                    f"Last failure: {result.status}. "
-                    f"Check logs for OOM kills, MPI errors, or resource constraints."
-                )
-
-            if config.verbose:
-                print(f"  WARNING: Solver failed at gap={gap:.6f}: {result.status}")
-                print(f"  Treating as 'allowed' (conservative). Failures: {consecutive_failures}")
-            return False
-
-        # Reset on success
-        consecutive_failures = 0
+            raise RuntimeError(
+                f"Solver failed while testing gap={gap:.6f} at Δσ={delta_sigma:.6f}. "
+                f"Failure: {result.status}"
+            )
         return result.excluded
 
     return binary_search_eps(
@@ -510,7 +491,6 @@ def run_scan(config: ScanConfig) -> List[Tuple[float, float]]:
     write_csv_header(config.output)
 
     results = []
-    failed_points = []  # Track which Δσ points failed
 
     for i, delta_sigma in enumerate(sigma_grid):
         if config.verbose:
@@ -523,43 +503,22 @@ def run_scan(config: ScanConfig) -> List[Tuple[float, float]]:
                 n_max=config.n_max, verbose=config.verbose,
             )
 
-        try:
-            # Binary search for Δε_max
-            eps_max, n_iter = find_eps_bound(
-                delta_sigma, A, f_id,
-                scalar_mask, scalar_deltas, spinning_mask,
-                config,
-                full_spectrum=full_spectrum,
-            )
+        # Binary search for Δε_max
+        eps_max, n_iter = find_eps_bound(
+            delta_sigma, A, f_id,
+            scalar_mask, scalar_deltas, spinning_mask,
+            config,
+            full_spectrum=full_spectrum,
+        )
 
-            if config.verbose:
-                print(f"  Δε_max = {eps_max:.6f}  ({n_iter} iterations)")
+        if config.verbose:
+            print(f"  Δε_max = {eps_max:.6f}  ({n_iter} iterations)")
 
-            results.append((delta_sigma, eps_max))
-            append_result_to_csv(config.output, delta_sigma, eps_max)
-
-        except RuntimeError as e:
-            # Binary search aborted due to solver failures
-            print(f"  ERROR: Failed at Δσ = {delta_sigma:.6f}: {e}")
-            failed_points.append((delta_sigma, str(e)))
-
-            # Write NaN to mark invalid result
-            append_result_to_csv(config.output, delta_sigma, float('nan'))
-            results.append((delta_sigma, float('nan')))
+        results.append((delta_sigma, eps_max))
+        append_result_to_csv(config.output, delta_sigma, eps_max)
 
     if config.verbose:
         print(f"\nScan complete. Results written to {config.output}")
-
-    # Check failure rate
-    if failed_points:
-        failure_rate = len(failed_points) / len(sigma_grid)
-        print(f"\nWARNING: {len(failed_points)}/{len(sigma_grid)} points failed ({failure_rate:.1%})")
-
-        if failure_rate > 0.5:
-            raise RuntimeError(
-                f"Stage A scan failed: {len(failed_points)}/{len(sigma_grid)} points "
-                f"had solver failures. Check resource allocation (memory, CPUs) and SDPB config."
-            )
 
     return results
 
@@ -680,6 +639,10 @@ def main():
         "--sdpb-cores", type=int, default=4,
         help="Number of MPI cores for SDPB (default: 4)"
     )
+    parser.add_argument(
+        "--sdpb-timeout", type=int, default=600,
+        help="SDPB timeout in seconds (default: 600)"
+    )
 
     args = parser.parse_args()
 
@@ -700,6 +663,7 @@ def main():
         sdpb_image=Path(args.sdpb_image) if args.sdpb_image else None,
         sdpb_precision=args.sdpb_precision,
         sdpb_cores=args.sdpb_cores,
+        sdpb_timeout=args.sdpb_timeout,
     )
 
     if config.precompute_only:

@@ -390,8 +390,7 @@ def _interpret_sdpb_output(output: dict) -> FeasibilityResult:
     - "found primal-dual optimal solution" → α exists → EXCLUDED
     - "found primal feasible solution" → α does not exist → ALLOWED
     - "dual infeasible" → α does not exist → ALLOWED
-    - "primal infeasible" → check dualObjective sign
-    - other → inconclusive, treat as ALLOWED
+    - other → inconclusive, treat as solver failure
 
     For our zero-objective feasibility problem, "primal-dual optimal"
     means both primal and dual are feasible, so α exists.
@@ -403,6 +402,7 @@ def _interpret_sdpb_output(output: dict) -> FeasibilityResult:
             excluded=True,
             status=f"Spectrum excluded (SDPB: {reason})",
             lp_status=0,
+            success=True,
         )
 
     if "primal feasible" in reason or "dual infeasible" in reason:
@@ -410,14 +410,16 @@ def _interpret_sdpb_output(output: dict) -> FeasibilityResult:
             excluded=False,
             status=f"Spectrum allowed (SDPB: {reason})",
             lp_status=2,
+            success=True,
         )
 
     if "maxComplementarity" in reason:
-        # Complementarity diverged — indicates the dual (our LP) is infeasible.
+        # Complementarity divergence is not an explicit feasibility certificate.
         return FeasibilityResult(
             excluded=False,
-            status=f"Spectrum allowed (SDPB: {reason})",
-            lp_status=2,
+            status=f"SDPB inconclusive (complementarity diverged): {reason}",
+            lp_status=4,
+            success=False,
         )
 
     # Inconclusive (timeout, max iterations, etc.)
@@ -425,4 +427,5 @@ def _interpret_sdpb_output(output: dict) -> FeasibilityResult:
         excluded=False,
         status=f"SDPB inconclusive: {reason}",
         lp_status=4,
+        success=False,
     )

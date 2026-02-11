@@ -46,6 +46,7 @@ python -m ising_bootstrap.scans.stage_a \
     --sdpb-image tools/sdpb-3.1.0.sif \
     --sdpb-precision 1024 \
     --sdpb-cores "${SLURM_CPUS_PER_TASK}" \
+    --sdpb-timeout 1800 \
     --output "data/test_sufficient_memory.csv" \
     --verbose
 
