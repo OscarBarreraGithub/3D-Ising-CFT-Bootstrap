@@ -357,14 +357,22 @@ def check_feasibility_sdpb(
     except subprocess.TimeoutExpired:
         return FeasibilityResult(
             excluded=False,
-            status="SDPB timed out",
-            lp_status=4,
+            status=f"SDPB timed out after {config.timeout}s",
+            lp_status=-1,
+            success=False,
         )
     except (RuntimeError, FileNotFoundError) as e:
+        # Classify failure type for diagnostics
+        error_msg = str(e)
+        is_oom = "signal 9" in error_msg.lower() or "killed" in error_msg.lower()
+        is_mpi = "mpirun" in error_msg.lower() or "slots" in error_msg.lower()
+        failure_type = "OOM kill" if is_oom else "MPI error" if is_mpi else "SDPB error"
+
         return FeasibilityResult(
             excluded=False,
-            status=f"SDPB error: {e}",
-            lp_status=4,
+            status=f"SDPB failed ({failure_type}): {error_msg[:200]}",
+            lp_status=-1,
+            success=False,
         )
     finally:
         if config.cleanup:

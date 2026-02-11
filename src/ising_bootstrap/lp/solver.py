@@ -37,25 +37,33 @@ class FeasibilityResult:
     excluded : bool
         True if the spectrum is excluded (LP feasible, functional α found).
         False if the spectrum is allowed (LP infeasible, no functional found).
+        IMPORTANT: Only trust this value when success=True. When success=False,
+        the solver failed and this value should be ignored.
     status : str
         Human-readable status message.
     lp_status : int
-        Raw status code from scipy.optimize.linprog:
+        Raw status code from scipy.optimize.linprog or SDPB:
         0 = optimal (LP feasible → spectrum excluded)
         1 = iteration limit
         2 = infeasible (LP infeasible → spectrum allowed)
         3 = unbounded
         4 = other
+        -1 = solver failure (SDPB only: do not trust excluded value)
     alpha : Optional[np.ndarray]
         The linear functional coefficients λ_{m,n} if excluded, else None.
     fun : Optional[float]
         Objective function value (0 for feasibility).
+    success : bool
+        True if the solver completed successfully (result is trustworthy).
+        False if the solver failed (excluded/lp_status should not be trusted).
+        Default: True for backward compatibility.
     """
     excluded: bool
     status: str
     lp_status: int
     alpha: Optional[np.ndarray] = None
     fun: Optional[float] = None
+    success: bool = True
 
 
 def scale_constraints(
@@ -255,6 +263,7 @@ def check_feasibility(
                 lp_status=4,
                 alpha=None,
                 fun=None,
+                success=False,
             )
 
         return FeasibilityResult(
@@ -263,6 +272,7 @@ def check_feasibility(
             lp_status=0,
             alpha=alpha,
             fun=res.fun,
+            success=True,
         )
     elif res.status == 2:
         # LP infeasible → spectrum ALLOWED
@@ -272,6 +282,7 @@ def check_feasibility(
             lp_status=2,
             alpha=None,
             fun=None,
+            success=True,
         )
     else:
         # Other status (iteration limit, unbounded, etc.)
@@ -281,6 +292,7 @@ def check_feasibility(
             lp_status=res.status,
             alpha=None,
             fun=None,
+            success=False,
         )
 
 
