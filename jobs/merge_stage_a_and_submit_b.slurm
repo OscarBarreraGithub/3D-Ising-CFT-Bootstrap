@@ -25,6 +25,14 @@ conda activate ising_bootstrap
 PROJECT_DIR="/n/holylabs/schwartz_lab/Lab/obarrera/3D-Ising-CFT-Bootstrap"
 cd "$PROJECT_DIR"
 
+SDPB_TIMEOUT="${SDPB_TIMEOUT:-1800}"
+STAGE_B_TOLERANCE="${STAGE_B_TOLERANCE:-1e-3}"
+EPS_SNAP_TOLERANCE="${EPS_SNAP_TOLERANCE:-1e-3}"
+STAGE_B_ARRAY="${STAGE_B_ARRAY:-0-50}"
+STAGE_B_CPUS="${STAGE_B_CPUS:-8}"
+STAGE_B_MEM="${STAGE_B_MEM:-128G}"
+STAGE_B_TIME="${STAGE_B_TIME:-12:00:00}"
+
 # --- Step 1: Merge Stage A CSVs ---
 echo "--- Merging Stage A results ---"
 bash jobs/merge_stage_a.sh
@@ -103,7 +111,14 @@ echo "Stage A sanity checks passed."
 # --- Step 3: Submit Stage B array job ---
 echo ""
 echo "--- Submitting Stage B ---"
-STAGE_B_JOB=$(sbatch --parsable jobs/stage_b_sdpb.slurm)
+echo "Stage B envelope: array=${STAGE_B_ARRAY}, cpus=${STAGE_B_CPUS}, mem=${STAGE_B_MEM}, time=${STAGE_B_TIME}, timeout=${SDPB_TIMEOUT}s"
+STAGE_B_JOB=$(sbatch --parsable \
+    --array="${STAGE_B_ARRAY}" \
+    --cpus-per-task="${STAGE_B_CPUS}" \
+    --mem="${STAGE_B_MEM}" \
+    --time="${STAGE_B_TIME}" \
+    --export=ALL,SDPB_TIMEOUT="${SDPB_TIMEOUT}",STAGE_B_TOLERANCE="${STAGE_B_TOLERANCE}",EPS_SNAP_TOLERANCE="${EPS_SNAP_TOLERANCE}" \
+    jobs/stage_b_sdpb.slurm)
 echo "Stage B job: ${STAGE_B_JOB}"
 
 # --- Step 4: Submit final merge + plot (after Stage B) ---
