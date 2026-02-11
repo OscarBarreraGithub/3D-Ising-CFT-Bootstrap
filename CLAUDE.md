@@ -42,33 +42,48 @@ See `docs/LP_CONDITIONING_BUG.md` for the full diagnosis and fix.
 - Cache block derivatives to `data/cached_blocks/`
 - Normalization: Dolan-Osborn convention (critical for matching paper results)
 
-## Pipeline Status (as of 2026-02-10)
+## Pipeline Status (as of 2026-02-11)
 
-### Previous Run (2026-02-09) — FAILED
+### Strict SDPB Semantics Merged ✓
 
-Job chain 59681121 → 59681179 → 59681180 ran but produced incorrect results.
+**Branch merged:** `codex/strict-failfast-stageb-snap-eps` → `main` (2026-02-11)
 
-**Issue:** All Stage A tasks returned Δε_max ≈ 2.5 (upper bound), indicating SDPB
-was failing on every call. See `docs/SDPB_MPI_FIX.md` for full diagnosis.
+**What changed:**
+1. **Strict SDPB failure handling** - inconclusive outcomes (timeout, unknown) now return `success=False`
+2. **Fail-fast Stage A/B** - ANY solver failure immediately aborts that point (no silent fallbacks)
+3. **Stage B epsilon anchoring** - snaps Stage A Δε to scalar grid with tolerance enforcement
+4. **Hardened merge gates** - validates Stage A data before launching Stage B
+5. **Timeout configuration** - `--sdpb-timeout` exposed and wired through all scripts
+6. **Runtime helpers** - single-point characterization, pilot jobs, smoke tests
 
-**Root causes:**
-1. MPI oversubscription error (missing `--oversubscribe` flag)
-2. Out-of-memory kills (16 GB insufficient for 420K blocks at 1024-bit precision)
+**All tests passing:** 17 SDPB + 28 Stage A + 30 Stage B = 75/75 ✓
 
-**Status:** **FIXED** (2026-02-10)
-- Added `--oversubscribe` to mpirun command in `sdpb.py`
-- Increased memory allocation: 16G → 48G in Stage A/B SLURM scripts
-- Increased Stage B CPUs: 4 → 8 for consistency with Stage A
+### Current Blocker: SDPB Timeout
 
-### Next Run
+**Problem:** SDPB needs >10 minutes per solve but times out at 10 minutes (600s)
+- Constraint matrix: 520,476 operators → 470,476 SDP blocks
+- Memory: 128G sufficient (70GB used, no OOM)
+- No MPI errors, no crashes
+- Just too slow for current timeout
 
-After fixes are applied, resubmit the pipeline:
+**Solution:** Find correct timeout via runtime envelope characterization
 
+### Next Steps
+
+**Phase 1: Single-point characterization** (Δσ=0.518)
 ```bash
-rm -f data/eps_bound_*.csv data/epsprime_bound_*.csv
-JOB_A=$(sbatch jobs/stage_a_sdpb.slurm | awk '{print $4}')
-sbatch --dependency=afterok:$JOB_A jobs/merge_stage_a_and_submit_b.slurm
+# Try increasing timeouts until one succeeds
+bash jobs/submit_stage_a_runtime_envelope.sh             # 1800s, 8 cores, 128G
+TIMEOUT=3600 bash jobs/submit_stage_a_runtime_envelope.sh  # If timed out
+TIMEOUT=3600 CPUS=16 MEM=160G bash ...                    # More resources
 ```
+
+**Success criterion:** `data/test_sufficient_memory.csv` shows `0.518000,1.41XXXX` (not NaN, not 2.5)
+
+**Phase 2: Pilot + Full Array**
+Once single-point works, use those parameters for the full pipeline.
+
+**See:** `HANDOFF_2026-02-11_STRICT_SEMANTICS_MERGED.md` for complete workflow
 
 ### Job Chain (Reference)
 
@@ -82,10 +97,14 @@ sbatch --dependency=afterok:$JOB_A jobs/merge_stage_a_and_submit_b.slurm
 
 ### Expected Timing
 
-- Consolidation: ~30-60 min
-- Stage A (51 tasks): ~1-4 hours per task (8h wall limit)
-- Stage B (51 tasks): ~1-4 hours per task (8h wall limit)
-- Total: could be 4-16+ hours depending on queue wait times
+**Note:** Timing depends on SDPB timeout configuration (TBD via envelope characterization)
+
+- Consolidation: ~30-60 min (already done)
+- Stage A (51 tasks): TBD based on per-solve time (wall limit: 12h)
+  - If SDPB needs 30 min/solve × 10 iterations = 5h per task
+  - If SDPB needs 60 min/solve × 10 iterations = 10h per task
+- Stage B (51 tasks): Similar to Stage A
+- Total: TBD (likely 12-24+ hours for full pipeline)
 
 ### How to Check Status
 
@@ -119,19 +138,20 @@ bash jobs/check_usage.sh <JOB_ID>
 
 ### What Failure Looks Like & What to Do
 
-- **All Δε_max = 2.5 (upper bound)**: SDPB failing on every call (returns "allowed" for all gaps).
-  Check logs for MPI errors or OOM kills. See `docs/SDPB_MPI_FIX.md`. **NOW FIXED**.
-- **All Δε_max = 0.5**: SDPB solver not working correctly. Check solver logs, SDPB output.
-  The merge job has a sanity check that aborts if all values are ≤ 0.5.
-  Historical issue from scipy/HiGHS conditioning — see `docs/LP_CONDITIONING_BUG.md`.
+- **NaN values in CSV**: SDPB timeout too short or solver failing.
+  With strict semantics (2026-02-11), ANY solver failure → NaN for that point.
+  Check logs for timeout messages. Increase `SDPB_TIMEOUT` env var.
+- **All Δε_max = 2.5 (upper bound)**: Historical issue (2026-02-09).
+  SDPB was failing but being treated as "allowed". **NOW FIXED** with strict semantics.
+- **All Δε_max = 0.5 (unitarity floor)**: Historical issue from scipy/HiGHS conditioning.
+  **NOW FIXED** with SDPB backend. Merge gate will block this pattern.
 - **Empty CSV files (header only)**: Tasks stuck in cache loading. Check if
-  `data/cached_blocks/ext_cache_consolidated.npz` exists (~1 GB). If not, consolidation
-  failed — check consolidation logs.
+  `data/cached_blocks/ext_cache_consolidated.npz` exists (~1 GB).
 - **Jobs stuck in PENDING**: Queue congestion or dependency failure. Check `squeue` and
-  `sacct -j <JOB_ID>` for dependency status.
-- **Stage B never submitted**: Merge job failed or aborted. Check merge job logs.
-- **OOM kills in logs**: Insufficient memory. Increase `--mem=` in SLURM script.
-  Now fixed at 48G for Stage A/B.
+  `sacct -j <JOB_ID>`.
+- **Stage B never submitted**: Merge gate blocked due to invalid Stage A data.
+  Check `jobs/merge_stage_a_and_submit_b.slurm` logs for validation failures.
+- **OOM kills in logs**: Insufficient memory. Now configured at 128G for Stage A/B.
 
 ### Key Architecture Decisions
 
@@ -144,13 +164,41 @@ bash jobs/check_usage.sh <JOB_ID>
 - **LP encoded as degenerate PMP**: Each discrete LP constraint becomes a 1×1 block with
   degree-0 polynomial in `sdpb.py`. SDPB solves this as a semidefinite program.
 
+## Strict Failure Semantics (2026-02-11)
+
+**IMPORTANT:** The pipeline now uses strict fail-fast behavior:
+
+1. **SDPB inconclusive outcomes = FAILURE**
+   - Timeouts, unknown termination reasons → `success=False`
+   - Only explicit feasible/infeasible results are trusted
+   - No silent "allowed" fallbacks
+
+2. **Stage A/B fail on ANY solver anomaly**
+   - First solver failure → point aborts → NaN written to CSV
+   - No retry logic, no conservative fallback
+   - This is CORRECT once timeout is properly configured
+
+3. **Stage B requires anchored epsilon**
+   - Stage A Δε is snapped to nearest scalar grid point
+   - Snap tolerance enforced (default 1e-3)
+   - Exactly one scalar must exist at anchored ε
+
+4. **Merge gate validates Stage A before Stage B**
+   - Blocks if non-finite values present
+   - Blocks if all values near 0.5 (unitarity floor)
+   - Blocks if all values near 2.5 (upper bound)
+   - Blocks if too few valid rows (<10)
+
+**This prevents silent failures but requires proper SDPB timeout configuration.**
+
 ## Common Pitfalls
 
-1. **Block normalization**: Must use Dolan-Osborn convention
-2. **Derivative indexing**: m + 2n ≤ 21, not total order
-3. **Discretization**: Table 2 must be followed literally
-4. **LP conditioning**: scipy fails at n_max=10 — use SDPB backend
-5. **NFS I/O**: Never load 520K individual files from NFS — use consolidated `.npz`
-6. **Python buffering**: Always set `PYTHONUNBUFFERED=1` in SLURM scripts
-7. **MPI in containers**: Must use `--oversubscribe` flag for mpirun inside Singularity
-8. **SDPB memory**: 1024-bit precision needs 3-6 GB per MPI rank (48G total for 8 cores)
+1. **SDPB timeout too short**: With strict semantics, timeout → NaN. Must find correct timeout via envelope characterization.
+2. **Block normalization**: Must use Dolan-Osborn convention
+3. **Derivative indexing**: m + 2n ≤ 21, not total order
+4. **Discretization**: Table 2 must be followed literally
+5. **LP conditioning**: scipy fails at n_max=10 — use SDPB backend
+6. **NFS I/O**: Never load 520K individual files from NFS — use consolidated `.npz`
+7. **Python buffering**: Always set `PYTHONUNBUFFERED=1` in SLURM scripts
+8. **MPI in containers**: Must use `--oversubscribe` flag for mpirun inside Singularity
+9. **SDPB memory**: 1024-bit precision needs ~8-10 GB per MPI rank (128G total for 8 cores at n_max=10)
