@@ -166,36 +166,43 @@ class TestInterpretOutput:
             {"terminateReason": "found dual feasible solution"}
         )
         assert result.excluded is True
+        assert result.success is True
 
     def test_primal_dual_optimal_excluded(self):
         result = _interpret_sdpb_output(
             {"terminateReason": "found primal-dual optimal solution"}
         )
         assert result.excluded is True
+        assert result.success is True
 
     def test_primal_feasible_allowed(self):
         result = _interpret_sdpb_output(
             {"terminateReason": "found primal feasible solution"}
         )
         assert result.excluded is False
+        assert result.success is True
 
     def test_dual_infeasible_allowed(self):
         result = _interpret_sdpb_output(
             {"terminateReason": "dual infeasible"}
         )
         assert result.excluded is False
+        assert result.success is True
 
-    def test_max_complementarity_allowed(self):
+    def test_max_complementarity_inconclusive(self):
         result = _interpret_sdpb_output(
             {"terminateReason": "maxComplementarity exceeded"}
         )
         assert result.excluded is False
+        assert result.success is False
+        assert "inconclusive" in result.status.lower()
 
     def test_unknown_reason_inconclusive(self):
         result = _interpret_sdpb_output(
             {"terminateReason": "maxIterationsExceeded"}
         )
         assert result.excluded is False
+        assert result.success is False
         assert "inconclusive" in result.status
 
 
