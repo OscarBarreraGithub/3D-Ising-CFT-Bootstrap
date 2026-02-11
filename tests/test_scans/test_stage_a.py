@@ -35,7 +35,7 @@ from ising_bootstrap.lp.constraint_matrix import (
     build_constraint_matrix_from_cache,
     precompute_extended_blocks,
 )
-from ising_bootstrap.lp.solver import check_feasibility
+from ising_bootstrap.lp.solver import FeasibilityResult
 
 
 # ============================================================================
@@ -188,6 +188,47 @@ class TestGapFiltering:
             assert count <= prev_count, \
                 f"Count increased from {prev_count} to {count} at gap={gap}"
             prev_count = count
+
+
+class TestFailureHandling:
+    """Tests for strict fail-fast behavior in Stage A."""
+
+    def test_solver_failure_raises_immediately(self, monkeypatch):
+        import ising_bootstrap.scans.stage_a as stage_a_module
+
+        def _failing_solver(*args, **kwargs):
+            return FeasibilityResult(
+                excluded=False,
+                status="simulated solver failure",
+                lp_status=-1,
+                success=False,
+            )
+
+        monkeypatch.setattr(stage_a_module, "check_feasibility", _failing_solver)
+
+        config = ScanConfig(
+            tolerance=0.1,
+            max_iter=3,
+            eps_lo=0.5,
+            eps_hi=1.5,
+        )
+
+        A = np.array([[1.0], [1.0]], dtype=np.float64)
+        f_id = np.array([1.0], dtype=np.float64)
+        scalar_mask = np.array([True, False], dtype=bool)
+        scalar_deltas = np.array([1.0, 3.0], dtype=np.float64)
+        spinning_mask = ~scalar_mask
+
+        with pytest.raises(RuntimeError, match="Solver failed while testing gap"):
+            find_eps_bound(
+                0.518,
+                A,
+                f_id,
+                scalar_mask,
+                scalar_deltas,
+                spinning_mask,
+                config,
+            )
 
 
 # ============================================================================

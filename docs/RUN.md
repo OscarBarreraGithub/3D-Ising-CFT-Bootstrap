@@ -87,7 +87,7 @@ salloc -p test --account=iaifi_lab -c 4 -t 01:00:00 --mem=8G
 
 python -m ising_bootstrap.scans.stage_a \
     --sigma-min 0.518 --sigma-max 0.518 --sigma-step 1.0 \
-    --backend sdpb --sdpb-cores 4 --tolerance 1e-4 \
+    --backend sdpb --sdpb-cores 4 --sdpb-timeout 1800 --tolerance 1e-4 \
     --output data/eps_bound_test.csv --verbose
 ```
 
@@ -103,15 +103,18 @@ Both `stage_a` and `stage_b` accept:
 | `--sigma-max` | 0.60 | End of Delta_sigma grid |
 | `--sigma-step` | 0.002 | Grid spacing |
 | `--tolerance` | 1e-4 | Binary search tolerance |
-| `--backend` | scipy | LP backend: `scipy` or `sdpb` |
+| `--backend` | sdpb | LP backend: `scipy` or `sdpb` |
 | `--sdpb-image` | tools/sdpb-3.1.0.sif | Path to SDPB Singularity image |
 | `--sdpb-precision` | 1024 | SDPB arithmetic precision in bits |
 | `--sdpb-cores` | 4 | MPI cores for SDPB |
+| `--sdpb-timeout` | 600 | SDPB timeout in seconds |
 | `--reduced` | false | Use T1-T2 only (faster, less accurate) |
 | `--output` | - | Output CSV path |
 | `--verbose` | false | Print progress |
 
 Stage B additionally requires `--eps-bound <path>` pointing to Stage A output.
+Stage B also supports `--eps-snap-tolerance` (default `1e-3`) to anchor `Δε`
+to the scalar grid used in Stage B.
 
 ---
 

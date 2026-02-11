@@ -1,22 +1,19 @@
 #!/bin/bash
-#SBATCH --job-name=ising_stage_b_sdpb
+#SBATCH --job-name=ising_stage_b_smoke
 #SBATCH --account=randall_lab
 #SBATCH --partition=shared
-#SBATCH --array=0-50
-#SBATCH --time=12:00:00
+#SBATCH --time=06:00:00
 #SBATCH --mem=128G
 #SBATCH --cpus-per-task=8
-#SBATCH --output=logs/stage_b_sdpb_%A_%a.log
-#SBATCH --error=logs/stage_b_sdpb_%A_%a.log
+#SBATCH --output=logs/stage_b_smoke_%j.log
+#SBATCH --error=logs/stage_b_smoke_%j.log
 
-# Stage B scan with SDPB backend.
-# Each array task handles one Δσ value.
-# Requires Stage A results in data/eps_bound.csv.
+# One-point Stage B smoke test using SDPB.
+# Purpose: validate strict failure behavior and fixed-epsilon anchoring.
 
 set -euo pipefail
 export PYTHONUNBUFFERED=1
 
-# --- Environment ---
 source ~/.bashrc
 conda activate ising_bootstrap
 
@@ -25,26 +22,27 @@ cd "$PROJECT_DIR"
 
 mkdir -p logs data
 
+SIGMA="${SIGMA:-0.518}"
+EPS_BOUND_CSV="${EPS_BOUND_CSV:-data/eps_bound.csv}"
 SDPB_TIMEOUT="${SDPB_TIMEOUT:-1800}"
 STAGE_B_TOLERANCE="${STAGE_B_TOLERANCE:-1e-3}"
 EPS_SNAP_TOLERANCE="${EPS_SNAP_TOLERANCE:-1e-3}"
+OUTPUT_CSV="${OUTPUT_CSV:-data/stage_b_smoke.csv}"
 
-# --- Compute Δσ for this task ---
-SIGMA_MIN=0.500
-SIGMA_STEP=0.002
-SIGMA=$(python3 -c "print(f'{${SIGMA_MIN} + ${SLURM_ARRAY_TASK_ID} * ${SIGMA_STEP}:.6f}')")
-
-echo "=== Stage B (SDPB) ==="
-echo "Task ID: ${SLURM_ARRAY_TASK_ID}"
+echo "=========================================="
+echo "Stage B SDPB Smoke Test"
+echo "=========================================="
 echo "Delta_sigma: ${SIGMA}"
+echo "Stage A map: ${EPS_BOUND_CSV}"
 echo "Timeout: ${SDPB_TIMEOUT}s"
 echo "Tolerance: ${STAGE_B_TOLERANCE}"
 echo "Epsilon snap tolerance: ${EPS_SNAP_TOLERANCE}"
+echo "Output: ${OUTPUT_CSV}"
 echo "Start: $(date)"
+echo ""
 
-# --- Run scan for this single Δσ ---
 python -m ising_bootstrap.scans.stage_b \
-    --eps-bound data/eps_bound.csv \
+    --eps-bound "${EPS_BOUND_CSV}" \
     --sigma-min "${SIGMA}" \
     --sigma-max "${SIGMA}" \
     --sigma-step 1.0 \
@@ -55,7 +53,9 @@ python -m ising_bootstrap.scans.stage_b \
     --sdpb-cores "${SLURM_CPUS_PER_TASK}" \
     --sdpb-timeout "${SDPB_TIMEOUT}" \
     --eps-snap-tolerance "${EPS_SNAP_TOLERANCE}" \
-    --output "data/epsprime_bound_${SLURM_ARRAY_TASK_ID}.csv" \
+    --output "${OUTPUT_CSV}" \
     --verbose
 
-echo "=== Done: $(date) ==="
+echo ""
+echo "=== Smoke complete: $(date) ==="
+cat "${OUTPUT_CSV}"

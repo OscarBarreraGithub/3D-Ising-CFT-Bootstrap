@@ -1,21 +1,22 @@
 #!/bin/bash
-#SBATCH --job-name=ising_stage_a_sdpb
+#SBATCH --job-name=ising_stage_a_pilot
 #SBATCH --account=randall_lab
 #SBATCH --partition=shared
-#SBATCH --array=0-50
+#SBATCH --array=0,9,18,27,36
 #SBATCH --time=12:00:00
 #SBATCH --mem=128G
 #SBATCH --cpus-per-task=8
-#SBATCH --output=logs/stage_a_sdpb_%A_%a.log
-#SBATCH --error=logs/stage_a_sdpb_%A_%a.log
+#SBATCH --output=logs/stage_a_pilot_%A_%a.log
+#SBATCH --error=logs/stage_a_pilot_%A_%a.log
 
-# Stage A scan with SDPB backend.
-# Each array task handles one Δσ value.
+# Stage A pilot scan with SDPB backend.
+# Default pilot points are spread across the scan range.
+# Override the array at submit time if needed:
+#   sbatch --array=0,16,25,32,50 jobs/stage_a_pilot_sdpb.slurm
 
 set -euo pipefail
 export PYTHONUNBUFFERED=1
 
-# --- Environment ---
 source ~/.bashrc
 conda activate ising_bootstrap
 
@@ -27,21 +28,18 @@ mkdir -p logs data
 SDPB_TIMEOUT="${SDPB_TIMEOUT:-1800}"
 STAGE_A_TOLERANCE="${STAGE_A_TOLERANCE:-1e-4}"
 
-# --- Compute Δσ for this task ---
 SIGMA_MIN=0.500
 SIGMA_STEP=0.002
 SIGMA=$(python3 -c "print(f'{${SIGMA_MIN} + ${SLURM_ARRAY_TASK_ID} * ${SIGMA_STEP}:.6f}')")
 
-echo "=== Stage A (SDPB) ==="
+echo "=== Stage A Pilot (SDPB) ==="
 echo "Task ID: ${SLURM_ARRAY_TASK_ID}"
 echo "Delta_sigma: ${SIGMA}"
-echo "SDPB image: tools/sdpb-3.1.0.sif"
 echo "CPUs: ${SLURM_CPUS_PER_TASK}"
 echo "Timeout: ${SDPB_TIMEOUT}s"
 echo "Tolerance: ${STAGE_A_TOLERANCE}"
 echo "Start: $(date)"
 
-# --- Run scan for this single Δσ ---
 python -m ising_bootstrap.scans.stage_a \
     --sigma-min "${SIGMA}" \
     --sigma-max "${SIGMA}" \
@@ -52,7 +50,7 @@ python -m ising_bootstrap.scans.stage_a \
     --sdpb-precision 1024 \
     --sdpb-cores "${SLURM_CPUS_PER_TASK}" \
     --sdpb-timeout "${SDPB_TIMEOUT}" \
-    --output "data/eps_bound_${SLURM_ARRAY_TASK_ID}.csv" \
+    --output "data/eps_bound_pilot_${SLURM_ARRAY_TASK_ID}.csv" \
     --verbose
 
 echo "=== Done: $(date) ==="

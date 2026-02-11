@@ -12,18 +12,15 @@ import numpy as np
 from pathlib import Path
 
 from ising_bootstrap.config import (
-    N_MAX, BINARY_SEARCH_MAX_ITER,
+    BINARY_SEARCH_MAX_ITER,
     DEFAULT_SIGMA_MIN, DEFAULT_SIGMA_MAX, DEFAULT_SIGMA_STEP,
     DEFAULT_EPSPRIME_TOLERANCE,
     DiscretizationTable,
 )
 from ising_bootstrap.scans.stage_a import (
-    binary_search_eps,
     build_full_constraint_matrix,
     write_csv_header as write_stage_a_header,
     append_result_to_csv as append_stage_a_result,
-    load_scan_results,
-    ScanConfig,
 )
 from ising_bootstrap.scans.stage_b import (
     StageBConfig,
@@ -33,12 +30,13 @@ from ising_bootstrap.scans.stage_b import (
     append_result_to_csv,
     load_stage_b_results,
     load_eps_bound_map,
+    _snap_delta_eps_to_scalar_grid,
 )
 from ising_bootstrap.spectrum.discretization import (
     SpectrumPoint, generate_full_spectrum,
 )
 from ising_bootstrap.lp.constraint_matrix import precompute_extended_blocks
-from ising_bootstrap.lp.solver import check_feasibility
+from ising_bootstrap.lp.solver import FeasibilityResult
 
 
 # ============================================================================
@@ -71,37 +69,39 @@ class TestTwoGapFiltering:
     def _apply_two_gap_mask(self, scalar_mask, scalar_deltas, spinning_mask,
                             delta_eps, delta_eps_prime):
         """Apply two-gap row selection (same logic as find_eps_prime_bound)."""
-        scalars_below_eps = scalar_mask & (scalar_deltas < delta_eps - 1e-10)
+        scalar_at_eps = scalar_mask & np.isclose(
+            scalar_deltas, delta_eps, atol=1e-10, rtol=0.0
+        )
         scalars_above_eps_prime = scalar_mask & (
             scalar_deltas >= delta_eps_prime - 1e-10
         )
-        return spinning_mask | scalars_below_eps | scalars_above_eps_prime
+        return spinning_mask | scalar_at_eps | scalars_above_eps_prime
 
     def test_two_gaps_exclude_middle_scalars(self):
         """Scalars between Δε and Δε' should be excluded."""
         spectrum = self._make_spectrum()
         scalar_mask, scalar_deltas, spinning_mask = self._make_masks(spectrum)
 
-        delta_eps = 1.2    # excludes scalars below 1.2
-        delta_eps_prime = 2.5  # excludes scalars between 1.2 and 2.5
+        delta_eps = 1.0
+        delta_eps_prime = 2.5
 
         mask = self._apply_two_gap_mask(
             scalar_mask, scalar_deltas, spinning_mask,
             delta_eps, delta_eps_prime,
         )
 
-        # Should include: scalars at 0.6, 1.0 (below eps),
+        # Should include: scalar at 1.0 (anchored epsilon),
         #                 scalars at 3.0, 4.0 (above eps'),
         #                 3 spinning operators
-        # Should exclude: scalars at 1.5, 2.0 (between eps and eps')
-        assert np.sum(mask) == 7  # 2 below + 2 above + 3 spinning
+        # Should exclude: scalar below eps (0.6) and in-gap scalars (1.5, 2.0)
+        assert np.sum(mask) == 6
 
     def test_no_second_gap_includes_all_above_eps(self):
-        """With Δε' = Δε, no second gap is imposed (no scalars excluded)."""
+        """With Δε' = Δε, all scalars at/above ε are included plus anchored ε."""
         spectrum = self._make_spectrum()
         scalar_mask, scalar_deltas, spinning_mask = self._make_masks(spectrum)
 
-        delta_eps = 1.2
+        delta_eps = 1.0
         delta_eps_prime = delta_eps  # no second gap
 
         mask = self._apply_two_gap_mask(
@@ -109,18 +109,17 @@ class TestTwoGapFiltering:
             delta_eps, delta_eps_prime,
         )
 
-        # All scalars at or above eps should be included
-        # Below eps: 0.6, 1.0
-        # At or above eps: 1.5, 2.0, 3.0, 4.0
+        # Scalars included: 1.0, 1.5, 2.0, 3.0, 4.0
         # Spinning: 3
-        assert np.sum(mask) == 9  # all operators
+        # Scalar below epsilon (0.6) remains excluded
+        assert np.sum(mask) == 8
 
     def test_very_large_second_gap_excludes_all_scalars_above_eps(self):
         """Large Δε' should exclude all scalars between Δε and Δε'."""
         spectrum = self._make_spectrum()
         scalar_mask, scalar_deltas, spinning_mask = self._make_masks(spectrum)
 
-        delta_eps = 1.2
+        delta_eps = 1.0
         delta_eps_prime = 100.0  # above all scalars
 
         mask = self._apply_two_gap_mask(
@@ -128,15 +127,15 @@ class TestTwoGapFiltering:
             delta_eps, delta_eps_prime,
         )
 
-        # Only scalars below eps (0.6, 1.0) and spinning (3) remain
-        assert np.sum(mask) == 5
+        # Only anchored epsilon scalar (1.0) and spinning (3) remain
+        assert np.sum(mask) == 4
 
     def test_spinning_always_included(self):
         """Spinning operators should always be included regardless of gaps."""
         spectrum = self._make_spectrum()
         scalar_mask, scalar_deltas, spinning_mask = self._make_masks(spectrum)
 
-        for delta_eps in [0.5, 1.2, 5.0]:
+        for delta_eps in [1.0, 2.0, 4.0]:
             for delta_eps_prime in [delta_eps, 2.0, 10.0, 100.0]:
                 mask = self._apply_two_gap_mask(
                     scalar_mask, scalar_deltas, spinning_mask,
@@ -150,7 +149,7 @@ class TestTwoGapFiltering:
         scalar_mask, scalar_deltas, spinning_mask = self._make_masks(spectrum)
 
         # Set eps' exactly at a scalar value (3.0)
-        delta_eps = 1.2
+        delta_eps = 1.0
         delta_eps_prime = 3.0
 
         mask = self._apply_two_gap_mask(
@@ -158,9 +157,12 @@ class TestTwoGapFiltering:
             delta_eps, delta_eps_prime,
         )
 
+        # Scalar at 1.0 is the anchor and must be included.
+        included_scalar_deltas = scalar_deltas[mask & scalar_mask]
+        assert 1.0 in included_scalar_deltas
+
         # Scalar at 3.0 should be included (>= eps' - 1e-10)
         # Scalars at 1.5, 2.0 should be excluded
-        included_scalar_deltas = scalar_deltas[mask & scalar_mask]
         assert 3.0 in included_scalar_deltas
         assert 1.5 not in included_scalar_deltas
         assert 2.0 not in included_scalar_deltas
@@ -170,9 +172,9 @@ class TestTwoGapFiltering:
         spectrum = self._make_spectrum()
         scalar_mask, scalar_deltas, spinning_mask = self._make_masks(spectrum)
 
-        delta_eps = 1.2
-        prev_count = len(spectrum)
-        for delta_eps_prime in [1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 100.0]:
+        delta_eps = 1.0
+        prev_count = np.inf
+        for delta_eps_prime in [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 100.0]:
             mask = self._apply_two_gap_mask(
                 scalar_mask, scalar_deltas, spinning_mask,
                 delta_eps, delta_eps_prime,
@@ -182,6 +184,34 @@ class TestTwoGapFiltering:
                 f"Count increased from {prev_count} to {count} " \
                 f"at eps_prime={delta_eps_prime}"
             prev_count = count
+
+
+class TestEpsilonAnchoring:
+    """Tests for Stage B epsilon anchoring onto the scalar grid."""
+
+    def test_snap_to_nearest_scalar(self):
+        scalar_mask = np.array([True, True, True, False], dtype=bool)
+        scalar_deltas = np.array([0.6, 1.0, 1.5, 3.0], dtype=np.float64)
+        snapped = _snap_delta_eps_to_scalar_grid(
+            1.01, scalar_deltas, scalar_mask, tolerance=0.05
+        )
+        assert abs(snapped - 1.0) < 1e-12
+
+    def test_snap_fails_outside_tolerance(self):
+        scalar_mask = np.array([True, True, True], dtype=bool)
+        scalar_deltas = np.array([0.6, 1.0, 1.5], dtype=np.float64)
+        with pytest.raises(RuntimeError, match="exceeding tolerance"):
+            _snap_delta_eps_to_scalar_grid(
+                1.2, scalar_deltas, scalar_mask, tolerance=1e-3
+            )
+
+    def test_snap_fails_without_scalars(self):
+        scalar_mask = np.array([False, False], dtype=bool)
+        scalar_deltas = np.array([3.0, 4.0], dtype=np.float64)
+        with pytest.raises(RuntimeError, match="No scalar operators"):
+            _snap_delta_eps_to_scalar_grid(
+                1.0, scalar_deltas, scalar_mask, tolerance=0.1
+            )
 
 
 # ============================================================================
@@ -337,6 +367,18 @@ class TestLoadEpsBoundMap:
         mapping = load_eps_bound_map(csv_path)
         assert 0.5182 in mapping
 
+    def test_nonfinite_values_are_dropped(self, tmp_path):
+        """NaN/inf values should be filtered out before Stage B."""
+        csv_path = tmp_path / "stage_a.csv"
+        write_stage_a_header(csv_path)
+        append_stage_a_result(csv_path, 0.510, 1.200)
+        append_stage_a_result(csv_path, 0.520, float("nan"))
+        append_stage_a_result(csv_path, 0.530, float("inf"))
+
+        mapping = load_eps_bound_map(csv_path)
+        assert len(mapping) == 1
+        assert abs(mapping[0.51] - 1.2) < 1e-6
+
 
 # ============================================================================
 # Tests for run_scan validation
@@ -351,8 +393,8 @@ class TestRunScanValidation:
         with pytest.raises(ValueError, match="eps_bound_path"):
             run_scan(config)
 
-    def test_skips_missing_sigma_points(self, tmp_path):
-        """Should skip Δσ points not present in Stage A results."""
+    def test_missing_sigma_points_raise(self, tmp_path):
+        """Strict mode should fail if any requested Δσ is missing in Stage A."""
         # Create Stage A CSV with only one point
         stage_a_path = tmp_path / "stage_a.csv"
         write_stage_a_header(stage_a_path)
@@ -375,10 +417,49 @@ class TestRunScanValidation:
             output=output_path,
         )
 
-        results = run_scan(config)
-        # Only 1 of 3 sigma points has Stage A data
-        assert len(results) == 1
-        assert abs(results[0][0] - 0.52) < 1e-4
+        with pytest.raises(RuntimeError, match="Missing valid Stage A"):
+            run_scan(config)
+
+
+class TestFailureHandling:
+    """Tests for strict fail-fast behavior in Stage B."""
+
+    def test_solver_failure_raises_immediately(self, monkeypatch):
+        import ising_bootstrap.scans.stage_b as stage_b_module
+
+        def _failing_solver(*args, **kwargs):
+            return FeasibilityResult(
+                excluded=False,
+                status="simulated solver failure",
+                lp_status=-1,
+                success=False,
+            )
+
+        monkeypatch.setattr(stage_b_module, "check_feasibility", _failing_solver)
+
+        config = StageBConfig(
+            tolerance=0.1,
+            max_iter=3,
+            eps_prime_hi=2.0,
+            eps_snap_tolerance=1e-6,
+        )
+        A = np.array([[1.0], [1.0]], dtype=np.float64)
+        f_id = np.array([1.0], dtype=np.float64)
+        scalar_mask = np.array([True, False], dtype=bool)
+        scalar_deltas = np.array([1.0, 3.0], dtype=np.float64)
+        spinning_mask = ~scalar_mask
+
+        with pytest.raises(RuntimeError, match="Solver failed while testing"):
+            find_eps_prime_bound(
+                0.518,
+                1.0,
+                A,
+                f_id,
+                scalar_mask,
+                scalar_deltas,
+                spinning_mask,
+                config,
+            )
 
 
 # ============================================================================
