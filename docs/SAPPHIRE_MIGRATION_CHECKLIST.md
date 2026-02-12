@@ -425,7 +425,7 @@ STAGE_A_JOB=$(sbatch --parsable --array=0-50 jobs/stage_a_sdpb.slurm)
 echo "Stage A job: $STAGE_A_JOB"
 
 # Wait for Stage A to complete, then merge and launch Stage B
-# (Can use jobs/overnight_full_pipeline.sh for automation, or manual sbatch)
+# Use jobs/run_pipeline.sh for automated chaining, or manual sbatch
 ```
 
 ---

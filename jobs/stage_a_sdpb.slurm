@@ -24,7 +24,7 @@ cd "$PROJECT_DIR"
 
 mkdir -p logs data
 
-SDPB_TIMEOUT="${SDPB_TIMEOUT:-1800}"
+SDPB_TIMEOUT="${SDPB_TIMEOUT:-18000}"  # 5 hours (measured SDPB solve time)
 STAGE_A_TOLERANCE="${STAGE_A_TOLERANCE:-1e-4}"
 
 # --- Compute Δσ for this task ---
