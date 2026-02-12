@@ -24,7 +24,7 @@ echo "Started: $(date)"
 echo ""
 
 # Runtime envelope (override at submit shell with env vars).
-SDPB_TIMEOUT="${SDPB_TIMEOUT:-1800}"
+SDPB_TIMEOUT="${SDPB_TIMEOUT:-18000}"  # 5 hours (measured SDPB solve time)
 STAGE_A_TOLERANCE="${STAGE_A_TOLERANCE:-1e-4}"
 STAGE_B_TOLERANCE="${STAGE_B_TOLERANCE:-1e-3}"
 EPS_SNAP_TOLERANCE="${EPS_SNAP_TOLERANCE:-1e-3}"
@@ -32,13 +32,13 @@ EPS_SNAP_TOLERANCE="${EPS_SNAP_TOLERANCE:-1e-3}"
 STAGE_A_ARRAY="${STAGE_A_ARRAY:-0-50}"
 STAGE_B_ARRAY="${STAGE_B_ARRAY:-0-50}"
 
-STAGE_A_CPUS="${STAGE_A_CPUS:-8}"
+STAGE_A_CPUS="${STAGE_A_CPUS:-16}"  # Sapphire production config
 STAGE_A_MEM="${STAGE_A_MEM:-128G}"
-STAGE_A_TIME="${STAGE_A_TIME:-12:00:00}"
+STAGE_A_TIME="${STAGE_A_TIME:-36:00:00}"  # Safety margin for 28-35h runtime
 
-STAGE_B_CPUS="${STAGE_B_CPUS:-8}"
+STAGE_B_CPUS="${STAGE_B_CPUS:-16}"  # Sapphire production config
 STAGE_B_MEM="${STAGE_B_MEM:-128G}"
-STAGE_B_TIME="${STAGE_B_TIME:-12:00:00}"
+STAGE_B_TIME="${STAGE_B_TIME:-36:00:00}"  # Safety margin for 28-35h runtime
 RUN_TEST_GATES="${RUN_TEST_GATES:-0}"
 
 echo "Runtime envelope:"

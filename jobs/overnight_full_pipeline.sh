@@ -1,21 +1,29 @@
 #!/bin/bash
 # =============================================================
-# Overnight Full Pipeline Automation
+# HISTORICAL: Overnight Runtime Envelope Characterization
+#
+# ⚠️  DEPRECATED: This script was used to diagnose timeout issues
+#     and determine that production runs need 28-35h per task.
+#
+#     For production validation, use:
+#       sbatch --partition=sapphire --mem=128G --cpus-per-task=16 \
+#         --time=36:00:00 \
+#         --export=ALL,SDPB_TIMEOUT=18000,SIGMA=0.518,OUTPUT_CSV=data/test.csv \
+#         jobs/test_sufficient_memory.slurm
+#
+#     This script remains for forensic reference only.
 # =============================================================
 #
-# This script:
+# Original purpose:
 # 1. Iteratively tests SDPB timeouts to find the right value
 # 2. Once successful, launches the full Stage A + Stage B pipeline
 # 3. Generates the final Figure 6 plot
 # 4. Has robust error handling to kill jobs if things go wrong
 #
-# Usage:
-#   cd /n/holylabs/schwartz_lab/Lab/obarrera/3D-Ising-CFT-Bootstrap
-#   bash jobs/overnight_full_pipeline.sh
-#
-# Output:
-#   - Status log: logs/overnight_pipeline_TIMESTAMP.log
-#   - Final plot: figures/fig6_reproduction.png (if successful)
+# Why deprecated:
+# - Script assumes 8-12h runtime but production needs 28-35h
+# - Would incorrectly mark healthy long jobs as failures
+# - Single-point validation is better for production testing
 #
 # =============================================================
 
@@ -162,75 +170,125 @@ echo ""
 
 # Test configurations: (timeout|cpus|mem|walltime|description)
 # NOTE: Using | delimiter instead of : to avoid conflict with HH:MM:SS walltime format
+# Strategy: Submit both in parallel with generous 5h SDPB timeout.
+# First to complete wins. This avoids sequential queue waits.
 TEST_CONFIGS=(
-    "1800|8|128G|06:00:00|Baseline (30 min timeout, 8 cores)"
-    "3600|8|128G|08:00:00|Extended timeout (60 min, 8 cores)"
-    "3600|16|160G|10:00:00|More cores (60 min, 16 cores)"
-    "5400|16|160G|12:00:00|Long timeout (90 min, 16 cores)"
+    "18000|8|128G|08:00:00|5h timeout, 8 cores"
+    "18000|16|160G|08:00:00|5h timeout, 16 cores"
 )
 
 SUCCESSFUL_CONFIG=""
 
-for config in "${TEST_CONFIGS[@]}"; do
+# --- Submit ALL tests in parallel ---
+declare -a TEST_JOB_IDS=()
+declare -a TEST_CSV_FILES=()
+declare -a TEST_DONE=()
+
+for i in "${!TEST_CONFIGS[@]}"; do
+    config="${TEST_CONFIGS[$i]}"
     IFS='|' read -r TIMEOUT CPUS MEM WALLTIME DESC <<< "$config"
 
-    echo "--- Testing: $DESC ---"
-    echo "  Timeout: ${TIMEOUT}s"
-    echo "  CPUs: $CPUS"
-    echo "  Memory: $MEM"
-    echo "  Walltime: $WALLTIME"
-    echo ""
+    CSV_FILE="data/test_config_${i}.csv"
+    rm -f "$CSV_FILE"
 
-    # Clean up previous test output
-    rm -f data/test_sufficient_memory.csv
+    echo "--- Submitting: $DESC ---"
+    echo "  Timeout: ${TIMEOUT}s, CPUs: $CPUS, Memory: $MEM, Walltime: $WALLTIME"
+    echo "  Output: $CSV_FILE"
 
-    # Submit envelope test
-    echo "Submitting envelope test..."
-    JOB_ID=$(TIMEOUT=$TIMEOUT CPUS=$CPUS MEM=$MEM WALLTIME=$WALLTIME \
+    JOB_ID=$(TIMEOUT=$TIMEOUT CPUS=$CPUS MEM=$MEM WALLTIME=$WALLTIME OUTPUT_CSV=$CSV_FILE \
         bash jobs/submit_stage_a_runtime_envelope.sh | grep "^Submitted" | awk '{print $NF}')
 
     if [ -z "$JOB_ID" ]; then
-        echo "ERROR: Failed to submit envelope test"
+        echo "ERROR: Failed to submit test $i"
         CLEANUP_NEEDED=true
         exit 1
     fi
 
     ALL_JOBS+=("$JOB_ID")
-    echo "Job ID: $JOB_ID"
+    TEST_JOB_IDS+=("$JOB_ID")
+    TEST_CSV_FILES+=("$CSV_FILE")
+    TEST_DONE+=(false)
+    echo "  Job ID: $JOB_ID"
     echo ""
+done
 
-    # Wait for job to complete (max 12 hours)
-    if wait_for_job "$JOB_ID" "envelope_test" 43200; then
-        echo "Job completed, checking results..."
+echo "All ${#TEST_JOB_IDS[@]} tests submitted in parallel."
+echo "Polling for first successful completion..."
+echo ""
 
-        # Check the log for errors
-        LOG_PATH="logs/test_sufficient_memory_${JOB_ID}.log"
-        if [ -f "$LOG_PATH" ]; then
-            if grep -q "ERROR:" "$LOG_PATH"; then
-                echo "  Found errors in log:"
-                grep "ERROR:" "$LOG_PATH" | tail -5
-                echo "  This configuration failed, trying next..."
-                echo ""
-                continue
-            fi
+# --- Poll all jobs until one succeeds or all fail ---
+MAX_WAIT=86400  # 24 hours
+ELAPSED=0
+SLEEP_INTERVAL=30
+
+while [ $ELAPSED -lt $MAX_WAIT ]; do
+    ALL_FINISHED=true
+
+    for i in "${!TEST_JOB_IDS[@]}"; do
+        # Skip already-resolved jobs
+        if [ "${TEST_DONE[$i]}" = true ]; then
+            continue
         fi
 
-        # Check if results are successful
-        if check_envelope_success "data/test_sufficient_memory.csv"; then
-            SUCCESSFUL_CONFIG="$config"
-            echo ""
-            echo "✓ Found working configuration!"
-            echo "  Configuration: $DESC"
-            echo "  Timeout: ${TIMEOUT}s, CPUs: $CPUS, Memory: $MEM"
-            echo ""
-            break
-        else
-            echo "  Configuration failed validation, trying next..."
-            echo ""
-        fi
-    else
-        echo "  Job failed or timed out, trying next configuration..."
+        ALL_FINISHED=false
+        JOB_ID="${TEST_JOB_IDS[$i]}"
+        CSV_FILE="${TEST_CSV_FILES[$i]}"
+        CONFIG="${TEST_CONFIGS[$i]}"
+        IFS='|' read -r _T _C _M _W DESC <<< "$CONFIG"
+
+        STATE=$(sacct -j "$JOB_ID" -n -o State -P | head -1 | tr -d ' ')
+
+        case "$STATE" in
+            COMPLETED)
+                echo "  Job $JOB_ID ($DESC) COMPLETED — checking results..."
+                if check_envelope_success "$CSV_FILE"; then
+                    SUCCESSFUL_CONFIG="$CONFIG"
+                    echo ""
+                    echo "✓ Found working configuration!"
+                    echo "  Configuration: $DESC"
+                    echo "  Job: $JOB_ID"
+                    echo ""
+
+                    # Cancel remaining jobs
+                    for j in "${!TEST_JOB_IDS[@]}"; do
+                        if [ "$j" != "$i" ] && [ "${TEST_DONE[$j]}" = false ]; then
+                            echo "  Cancelling remaining job ${TEST_JOB_IDS[$j]}..."
+                            scancel "${TEST_JOB_IDS[$j]}" 2>/dev/null || true
+                        fi
+                    done
+                    break 2  # Exit both loops
+                else
+                    echo "  Job $JOB_ID completed but failed validation."
+                    TEST_DONE[$i]=true
+                fi
+                ;;
+            FAILED|CANCELLED|TIMEOUT|NODE_FAIL|OUT_OF_MEMORY)
+                echo "  Job $JOB_ID ($DESC) $STATE"
+                TEST_DONE[$i]=true
+                ;;
+        esac
+    done
+
+    # Check if all jobs are done (all failed)
+    if [ "$ALL_FINISHED" = true ]; then
         echo ""
+        echo "All test jobs have finished without a successful result."
+        break
+    fi
+
+    sleep $SLEEP_INTERVAL
+    ELAPSED=$((ELAPSED + SLEEP_INTERVAL))
+
+    # Progress every 5 minutes
+    if [ $((ELAPSED % 300)) -eq 0 ]; then
+        echo "  [${ELAPSED}s elapsed] Still polling..."
+        for i in "${!TEST_JOB_IDS[@]}"; do
+            if [ "${TEST_DONE[$i]}" = false ]; then
+                ST=$(sacct -j "${TEST_JOB_IDS[$i]}" -n -o State -P | head -1 | tr -d ' ')
+                IFS='|' read -r _T _C _M _W DESC <<< "${TEST_CONFIGS[$i]}"
+                echo "    ${TEST_JOB_IDS[$i]} ($DESC): $ST"
+            fi
+        done
     fi
 done
 

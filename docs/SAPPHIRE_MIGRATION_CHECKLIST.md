@@ -116,6 +116,46 @@ python -m ising_bootstrap.scans.stage_a --help | grep -i timeout
 
 ---
 
+#### 1.4 Wrapper Script Defaults
+
+Verify production-safe defaults in pipeline launcher scripts:
+
+- [ ] `run_pipeline.sh` defaults to sapphire values (16 cores, 36h, 18000s timeout)
+- [ ] `merge_stage_a_and_submit_b.slurm` defaults to sapphire values for Stage B
+- [ ] Overrides still possible via environment variables for testing
+
+**Verification Commands:**
+```bash
+# Check run_pipeline.sh defaults (lines 27, 35-41)
+grep -A1 "SDPB_TIMEOUT=" jobs/run_pipeline.sh | head -2
+# Should show: SDPB_TIMEOUT="${SDPB_TIMEOUT:-18000}"
+
+grep -A1 "STAGE_A_CPUS=" jobs/run_pipeline.sh | head -2
+# Should show: STAGE_A_CPUS="${STAGE_A_CPUS:-16}"
+
+grep -A1 "STAGE_A_TIME=" jobs/run_pipeline.sh | head -2
+# Should show: STAGE_A_TIME="${STAGE_A_TIME:-36:00:00}"
+
+grep -A1 "STAGE_B_CPUS=" jobs/run_pipeline.sh | head -2
+# Should show: STAGE_B_CPUS="${STAGE_B_CPUS:-16}"
+
+grep -A1 "STAGE_B_TIME=" jobs/run_pipeline.sh | head -2
+# Should show: STAGE_B_TIME="${STAGE_B_TIME:-36:00:00}"
+
+# Check merge_stage_a_and_submit_b.slurm defaults (lines 28, 32-34)
+grep "SDPB_TIMEOUT=\|STAGE_B_CPUS=\|STAGE_B_TIME=" jobs/merge_stage_a_and_submit_b.slurm
+# Should show 18000, 16, 36:00:00
+```
+
+**Expected result:** All defaults aligned with sapphire partition (16 cores, 36h, 18000s)
+
+**Why This Matters:**
+- Wrapper scripts override .slurm file settings by passing explicit `--cpus-per-task`, `--time`, etc. to sbatch
+- Without correct defaults, production runs would still use 8 cores/12h despite .slurm files saying sapphire
+- This was the P0 issue found in external review (2026-02-12)
+
+---
+
 ### 2. Documentation Review
 
 #### 2.1 Overnight Failure Analysis

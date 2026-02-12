@@ -45,6 +45,7 @@ Specifically, please review:
 │   ├── stage_b_sdpb.slurm             # ⭐ CRITICAL - Main Stage B (51 tasks)
 │   ├── test_sufficient_memory.slurm   # Single-point validation script
 │   ├── verify_partition_migration.sh  # Automated verification (already run)
+│   ├── overnight_full_pipeline.sh     # DEPRECATED - Historical characterization only
 │   ├── merge_stage_a_and_submit_b.slurm
 │   ├── final_merge_and_plot.slurm
 │   └── ...                            # 12 other supporting scripts
@@ -217,6 +218,25 @@ sbatch --partition=sapphire --mem=128G --cpus-per-task=16 --time=36:00:00 \
 - [`logs/archive/2026-02-10-stage-a-timeout/README.md`](logs/archive/2026-02-10-stage-a-timeout/README.md)
 
 **Key question:** Do the archived artifacts support the timeline and analysis?
+
+---
+
+## Known Issues Resolved (2026-02-12 Review)
+
+The initial migration had three issues found during external review, all now fixed:
+
+**P0 (Critical) - Pipeline launcher defaults:** ✓ FIXED
+- `run_pipeline.sh` and `merge_stage_a_and_submit_b.slurm` now default to sapphire settings
+- Default: 16 cores, 36h walltime, 18000s SDPB timeout
+- Overrides still possible via env vars for testing
+
+**P1 (High) - Overnight automation obsolete:** ✓ RESOLVED
+- `overnight_full_pipeline.sh` marked as historical/deprecated
+- Production validation: Use single-point test via `test_sufficient_memory.slurm`
+
+**P2 (Medium) - Verification script portability:** ✓ FIXED
+- `verify_partition_migration.sh` now uses relative path resolution
+- Works from any checkout location
 
 ---
 

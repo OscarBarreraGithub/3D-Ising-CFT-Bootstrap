@@ -1,10 +1,14 @@
 #!/bin/bash
 # Verify all .slurm files use sapphire partition
 
-PROJECT_DIR="/n/holylabs/schwartz_lab/Lab/obarrera/3D-Ising-CFT-Bootstrap"
+# Portable project root detection
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 cd "$PROJECT_DIR/jobs"
 
 echo "Checking partition configuration in all .slurm files:"
+echo "Working directory: $PWD"
 echo ""
 
 ERRORS=0
