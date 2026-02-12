@@ -25,6 +25,9 @@ conda activate ising_bootstrap
 PROJECT_DIR="/n/holylabs/schwartz_lab/Lab/obarrera/3D-Ising-CFT-Bootstrap"
 cd "$PROJECT_DIR"
 
+# Load notification config if available
+[ -f .env.notifications ] && source .env.notifications
+
 # Step 1: Merge Stage B CSVs
 echo "--- Merging Stage B results ---"
 bash jobs/merge_stage_b.sh
@@ -43,3 +46,12 @@ echo "=== Pipeline complete! ==="
 echo "Figure saved to: figures/fig6_reproduction.png"
 echo "                 figures/fig6_reproduction.pdf"
 echo "End: $(date)"
+
+# Send completion notification
+if [ -f scripts/notification.py ]; then
+    python scripts/notification.py \
+        --title "Pipeline Complete - Figure 6 Ready!" \
+        --message "The 3D-Ising-CFT-Bootstrap pipeline has completed successfully. Figure 6 has been generated and saved. Compare with reference figure el_showk_2012_fig6.png to validate results." \
+        --severity info \
+        --context "output_png=figures/fig6_reproduction.png,output_pdf=figures/fig6_reproduction.pdf" || true
+fi

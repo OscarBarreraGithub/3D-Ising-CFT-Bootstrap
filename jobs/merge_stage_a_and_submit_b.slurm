@@ -25,6 +25,12 @@ conda activate ising_bootstrap
 PROJECT_DIR="/n/holylabs/schwartz_lab/Lab/obarrera/3D-Ising-CFT-Bootstrap"
 cd "$PROJECT_DIR"
 
+# Load notification config if available
+[ -f .env.notifications ] && source .env.notifications
+
+# Load validation config if available
+[ -f .env.validation ] && source .env.validation
+
 SDPB_TIMEOUT="${SDPB_TIMEOUT:-18000}"  # 5 hours
 STAGE_B_TOLERANCE="${STAGE_B_TOLERANCE:-1e-3}"
 EPS_SNAP_TOLERANCE="${EPS_SNAP_TOLERANCE:-1e-3}"
@@ -92,21 +98,63 @@ if [ "${VALID_ROWS}" -lt 10 ]; then
 fi
 
 if [ "${NONFINITE_ROWS}" -gt 0 ]; then
-    echo "ERROR: Found ${NONFINITE_ROWS} non-finite Stage A values. Aborting pipeline."
+    ERROR_MSG="Found ${NONFINITE_ROWS} non-finite Stage A values (NaN/inf). This indicates SDPB timeout or solver failures."
+    echo "ERROR: ${ERROR_MSG}"
+
+    # Send failure notification
+    if [ -f scripts/notification.py ]; then
+        python scripts/notification.py \
+            --title "Stage A Validation FAILED" \
+            --message "${ERROR_MSG}" \
+            --severity critical \
+            --context "valid_rows=${VALID_ROWS},nonfinite_rows=${NONFINITE_ROWS},pattern=nan_values" || true
+    fi
+
     exit 1
 fi
 
 if [ "${LOWER_ROWS}" -eq "${VALID_ROWS}" ]; then
-    echo "ERROR: All valid Stage A results are near the unitarity floor (~0.5). Solver is still broken."
+    ERROR_MSG="All valid Stage A results are near the unitarity floor (~0.5). This indicates LP solver conditioning bug (scipy/HiGHS). Ensure SDPB backend is being used."
+    echo "ERROR: ${ERROR_MSG}"
+
+    # Send failure notification
+    if [ -f scripts/notification.py ]; then
+        python scripts/notification.py \
+            --title "Stage A Validation FAILED" \
+            --message "${ERROR_MSG}" \
+            --severity critical \
+            --context "valid_rows=${VALID_ROWS},pattern=all_lower_bound" || true
+    fi
+
     exit 1
 fi
 
 if [ "${UPPER_ROWS}" -eq "${VALID_ROWS}" ]; then
-    echo "ERROR: All valid Stage A results are near the upper scan bound (~2.5). Solver is still broken."
+    ERROR_MSG="All valid Stage A results are near the upper scan bound (~2.5). This indicates LP solver is broken or constraints are incorrect."
+    echo "ERROR: ${ERROR_MSG}"
+
+    # Send failure notification
+    if [ -f scripts/notification.py ]; then
+        python scripts/notification.py \
+            --title "Stage A Validation FAILED" \
+            --message "${ERROR_MSG}" \
+            --severity critical \
+            --context "valid_rows=${VALID_ROWS},pattern=all_upper_bound" || true
+    fi
+
     exit 1
 fi
 
 echo "Stage A sanity checks passed."
+
+# Send success notification
+if [ -f scripts/notification.py ]; then
+    python scripts/notification.py \
+        --title "Stage A Complete - Validation Passed" \
+        --message "Stage A (upper bound on Δε) completed successfully. ${VALID_ROWS} valid results. Proceeding to Stage B submission." \
+        --severity info \
+        --context "valid_rows=${VALID_ROWS},total_rows=${n_rows}" || true
+fi
 
 # --- Step 3: Submit Stage B array job ---
 echo ""
@@ -120,6 +168,27 @@ STAGE_B_JOB=$(sbatch --parsable \
     --export=ALL,SDPB_TIMEOUT="${SDPB_TIMEOUT}",STAGE_B_TOLERANCE="${STAGE_B_TOLERANCE}",EPS_SNAP_TOLERANCE="${EPS_SNAP_TOLERANCE}" \
     jobs/stage_b_sdpb.slurm)
 echo "Stage B job: ${STAGE_B_JOB}"
+
+# Send Stage B submission notification
+if [ -f scripts/notification.py ]; then
+    ARRAY_SIZE=$(echo "${STAGE_B_ARRAY}" | awk -F'-' '{if (NF==2) print $2-$1+1; else print 1}')
+    python scripts/notification.py \
+        --title "Stage B Submitted" \
+        --message "Stage B (upper bound on Δε') has been submitted. Job will compute the second constraint for each point from Stage A." \
+        --severity info \
+        --context "job_id=${STAGE_B_JOB},array_size=${ARRAY_SIZE},estimated_runtime=28-35 hours" || true
+fi
+
+# Submit progressive validation daemon for Stage B (if enabled)
+if [ "${ENABLE_PROGRESSIVE_VALIDATION:-1}" = "1" ] && [ -f jobs/progressive_validation.slurm ]; then
+    echo "--- Launching progressive validation daemon for Stage B ---"
+    VALIDATION_B_JOB=$(sbatch --parsable \
+        --dependency=after:${STAGE_B_JOB} \
+        --kill-on-invalid-dep=yes \
+        --export=ALL,STAGE=b,JOB_ID_TO_MONITOR="${STAGE_B_JOB}",POLL_INTERVAL="${POLL_INTERVAL:-60}" \
+        jobs/progressive_validation.slurm)
+    echo "Validation daemon (Stage B): ${VALIDATION_B_JOB} (monitoring ${STAGE_B_JOB})"
+fi
 
 # --- Step 4: Submit final merge + plot (after Stage B) ---
 PLOT_JOB=$(sbatch --parsable --dependency=afterok:${STAGE_B_JOB} jobs/final_merge_and_plot.slurm)

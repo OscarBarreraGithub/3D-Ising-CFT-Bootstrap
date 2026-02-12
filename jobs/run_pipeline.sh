@@ -23,6 +23,12 @@ echo "Working directory: $(pwd)"
 echo "Started: $(date)"
 echo ""
 
+# Load notification config if available
+[ -f .env.notifications ] && source .env.notifications
+
+# Load validation config if available
+[ -f .env.validation ] && source .env.validation
+
 # Runtime envelope (override at submit shell with env vars).
 SDPB_TIMEOUT="${SDPB_TIMEOUT:-18000}"  # 5 hours (measured SDPB solve time)
 STAGE_A_TOLERANCE="${STAGE_A_TOLERANCE:-1e-4}"
@@ -84,6 +90,17 @@ STAGE_A_JOB=$(sbatch --parsable \
     --export=ALL,SDPB_TIMEOUT="${SDPB_TIMEOUT}",STAGE_A_TOLERANCE="${STAGE_A_TOLERANCE}" \
     jobs/stage_a_sdpb.slurm)
 echo "  Stage A job: ${STAGE_A_JOB} (array ${STAGE_A_ARRAY})"
+
+# Submit progressive validation daemon for Stage A (if enabled)
+if [ "${ENABLE_PROGRESSIVE_VALIDATION:-1}" = "1" ] && [ -f jobs/progressive_validation.slurm ]; then
+    echo "  Launching progressive validation daemon for Stage A..."
+    VALIDATION_A_JOB=$(sbatch --parsable \
+        --dependency=after:${STAGE_A_JOB} \
+        --kill-on-invalid-dep=yes \
+        --export=ALL,STAGE=a,JOB_ID_TO_MONITOR="${STAGE_A_JOB}",POLL_INTERVAL="${POLL_INTERVAL:-60}" \
+        jobs/progressive_validation.slurm)
+    echo "  Validation daemon (Stage A): ${VALIDATION_A_JOB} (monitoring ${STAGE_A_JOB})"
+fi
 
 # --- Step 3: Merge Stage A + Submit Stage B + Final Plot ---
 echo "--- Step 3: Submitting merge + Stage B launcher (depends on Stage A) ---"
