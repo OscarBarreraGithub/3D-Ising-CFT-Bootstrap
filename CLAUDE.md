@@ -65,6 +65,49 @@ See `docs/LP_CONDITIONING_BUG.md` for the full diagnosis and fix.
 - Sapphire: Production (n_max=10, full 51-task arrays)
 - Shared: Development/testing (n_max≤5, quick tests, debugging)
 
+## Monitoring (as of 2026-02-12)
+
+**NEW:** Comprehensive monitoring system for 60+ hour production runs.
+
+**Quick Start:**
+```bash
+# Configure notifications (one-time setup)
+bash scripts/setup_notifications.sh
+
+# Run pipeline with monitoring (enabled by default)
+bash jobs/run_pipeline.sh
+```
+
+**Key Features:**
+1. **Progressive Validation** - Real-time anomaly detection during Stage A/B execution
+   - Polls data/ directory every 60s for new results
+   - Detects patterns: all NaN (SDPB timeout), all ~0.5 (scipy bug), all ~2.5 (solver broken)
+   - Alerts at thresholds: warning (10 tasks), critical (20 tasks)
+   - **Saves 15-25 hours** by catching failures early
+
+2. **Email/Slack Notifications** - Automated alerts for key pipeline events
+   - Stage A complete & validation result (pass/fail with reason)
+   - Stage B submission & completion
+   - Figure 6 generation complete
+   - Anomaly alerts (warning/critical)
+
+**Configuration:**
+- Opt-in with `ENABLE_PROGRESSIVE_VALIDATION=1` (enabled by default)
+- Configure via `.env.notifications` and `.env.validation` files
+- Interactive setup: `bash scripts/setup_notifications.sh`
+- See [docs/MONITORING_SETUP.md](docs/MONITORING_SETUP.md) for full guide
+
+**Backwards Compatible:**
+- Pipeline works identically without monitoring
+- Notification failures don't crash pipeline (best-effort delivery)
+- Minimal overhead (<0.01% of 60-hour runtime)
+- Daemon runs on `shared` partition (doesn't compete with sapphire production)
+
+**Disable Monitoring:**
+```bash
+ENABLE_PROGRESSIVE_VALIDATION=0 bash jobs/run_pipeline.sh
+```
+
 ## Pipeline Status (as of 2026-02-12)
 
 ### Strict SDPB Semantics Merged ✓
