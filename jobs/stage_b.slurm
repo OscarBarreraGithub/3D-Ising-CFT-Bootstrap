@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=ising_stage_b
 #SBATCH --account=randall_lab
-#SBATCH --partition=shared
+#SBATCH --partition=sapphire
 #SBATCH --array=0-50
 #SBATCH --time=02:00:00
 #SBATCH --mem=8G

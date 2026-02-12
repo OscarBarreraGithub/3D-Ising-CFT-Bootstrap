@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=lp_diagnose
 #SBATCH --account=randall_lab
-#SBATCH --partition=shared
+#SBATCH --partition=sapphire
 #SBATCH --time=01:00:00
 #SBATCH --mem=8G
 #SBATCH --cpus-per-task=1

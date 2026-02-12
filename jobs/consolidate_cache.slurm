@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=consolidate_cache
 #SBATCH --account=randall_lab
-#SBATCH --partition=shared
+#SBATCH --partition=sapphire
 #SBATCH --time=02:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=1

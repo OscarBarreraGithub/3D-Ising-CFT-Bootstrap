@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=test_error_detection
 #SBATCH --account=randall_lab
-#SBATCH --partition=shared
+#SBATCH --partition=sapphire
 #SBATCH --time=00:30:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8

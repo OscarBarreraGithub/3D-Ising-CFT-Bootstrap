@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=ising_precompute
 #SBATCH --account=randall_lab
-#SBATCH --partition=shared
+#SBATCH --partition=sapphire
 #SBATCH --time=24:00:00
 #SBATCH --mem=8G
 #SBATCH --cpus-per-task=8

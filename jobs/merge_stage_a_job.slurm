@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=ising_merge_a
 #SBATCH --account=randall_lab
-#SBATCH --partition=shared
+#SBATCH --partition=sapphire
 #SBATCH --time=00:10:00
 #SBATCH --mem=1G
 #SBATCH --cpus-per-task=1

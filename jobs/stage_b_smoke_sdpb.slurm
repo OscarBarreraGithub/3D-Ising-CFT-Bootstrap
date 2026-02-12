@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=ising_stage_b_smoke
 #SBATCH --account=randall_lab
-#SBATCH --partition=shared
-#SBATCH --time=06:00:00
+#SBATCH --partition=sapphire
+#SBATCH --time=36:00:00
 #SBATCH --mem=128G
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --output=logs/stage_b_smoke_%j.log
 #SBATCH --error=logs/stage_b_smoke_%j.log
 

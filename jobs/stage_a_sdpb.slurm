@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=ising_stage_a_sdpb
 #SBATCH --account=randall_lab
-#SBATCH --partition=shared
+#SBATCH --partition=sapphire
 #SBATCH --array=0-50
-#SBATCH --time=12:00:00
+#SBATCH --time=36:00:00
 #SBATCH --mem=128G
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --output=logs/stage_a_sdpb_%A_%a.log
 #SBATCH --error=logs/stage_a_sdpb_%A_%a.log
 
