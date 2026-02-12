@@ -33,7 +33,7 @@ import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 # Import notification module
 try:
@@ -89,6 +89,20 @@ class ValidationState:
 class ProgressiveValidator:
     """Progressive validation daemon for Stage A/B results."""
 
+    TERMINAL_JOB_STATES = {
+        "BOOT_FAIL",
+        "CANCELLED",
+        "COMPLETED",
+        "DEADLINE",
+        "FAILED",
+        "NODE_FAIL",
+        "OUT_OF_MEMORY",
+        "PREEMPTED",
+        "REVOKED",
+        "SPECIAL_EXIT",
+        "TIMEOUT",
+    }
+
     def __init__(
         self,
         stage: str,
@@ -112,6 +126,8 @@ class ProgressiveValidator:
         self.lower_bound_tolerance = lower_bound_tolerance
         self.upper_bound_tolerance = upper_bound_tolerance
         self.cancel_on_critical = cancel_on_critical
+        # Default chosen to include normal Stage A/B single-row CSVs (~44-70 bytes).
+        self.min_file_size_bytes = int(os.getenv("VALIDATOR_MIN_FILE_SIZE_BYTES", "20"))
 
         # File pattern based on stage
         if self.stage == "a":
@@ -134,10 +150,10 @@ class ProgressiveValidator:
         self.UNITARITY_FLOOR = 0.5
         self.UPPER_BOUND = 2.5
 
-    def discover_new_files(self) -> List[Path]:
+    def discover_new_files(self) -> List[Tuple[int, Path]]:
         """Find CSV files that haven't been analyzed yet."""
         all_files = glob.glob(str(self.data_dir / self.file_pattern))
-        new_files = []
+        new_files: List[Tuple[int, Path]] = []
 
         for file_path in all_files:
             # Extract task ID from filename
@@ -152,9 +168,9 @@ class ProgressiveValidator:
             if task_id in self.state.analyzed_tasks:
                 continue
 
-            # Check file size (must be > 100 bytes to be complete)
+            # Skip tiny files that are likely incomplete writes.
             try:
-                if Path(file_path).stat().st_size < 100:
+                if Path(file_path).stat().st_size < self.min_file_size_bytes:
                     continue
             except OSError:
                 continue
@@ -163,42 +179,101 @@ class ProgressiveValidator:
 
         return new_files
 
-    def analyze_result(self, task_id: int, file_path: Path) -> Optional[float]:
+    def analyze_result(self, task_id: int, file_path: Path) -> Tuple[str, Optional[float], Optional[str]]:
         """
         Analyze a single result file.
 
         Returns:
-            Value if valid, None if anomalous (NaN/inf)
+            Tuple(status, value, reason):
+              - status="valid": value parsed successfully
+              - status="anomalous": value is definitely bad (NaN/inf)
+              - status="pending": file looks incomplete; retry later
         """
         try:
             with open(file_path) as f:
                 reader = csv.DictReader(f)
-                rows = list(reader)
-
-                if not rows:
-                    self.state.anomalous_tasks[task_id] = "empty_csv"
-                    return None
+                row = next(reader, None)
+                if row is None:
+                    return "pending", None, "no_data_rows_yet"
 
                 # Get value from first row
-                row = rows[0]
                 if self.value_column not in row:
-                    self.state.anomalous_tasks[task_id] = f"missing_column_{self.value_column}"
-                    return None
+                    return "pending", None, f"missing_column_{self.value_column}"
 
                 value = float(row[self.value_column])
 
                 # Check for NaN/inf
                 if not math.isfinite(value):
                     self.state.anomalous_tasks[task_id] = "nan_or_inf"
-                    return None
+                    return "anomalous", None, "nan_or_inf"
 
                 # Valid result
                 self.state.valid_results[task_id] = value
-                return value
+                return "valid", value, None
 
         except Exception as e:
-            self.state.anomalous_tasks[task_id] = f"parse_error_{type(e).__name__}"
-            return None
+            # Parsing may race with in-progress file writes; retry on next poll.
+            return "pending", None, f"parse_retry_{type(e).__name__}"
+
+    def get_parent_job_state(self) -> Optional[str]:
+        """
+        Get SLURM state for the monitored parent job.
+
+        Returns:
+            State string (e.g., RUNNING, COMPLETED, FAILED) or None if unavailable.
+        """
+        # Prefer sacct for terminal states/history.
+        try:
+            proc = subprocess.run(
+                [
+                    "sacct",
+                    "-X",
+                    "-j",
+                    self.job_id,
+                    "--format=JobIDRaw,State",
+                    "--noheader",
+                    "--parsable2",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                rows: List[Tuple[str, str]] = []
+                for line in proc.stdout.splitlines():
+                    if "|" not in line:
+                        continue
+                    job_id_raw, state_raw = line.split("|", 1)
+                    job_id_raw = job_id_raw.strip()
+                    state = state_raw.strip().split()[0].split("+", 1)[0].upper()
+                    if not state:
+                        continue
+                    rows.append((job_id_raw, state))
+
+                if rows:
+                    for job_id_raw, state in rows:
+                        if job_id_raw == self.job_id:
+                            return state
+                    return rows[0][1]
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        # Fallback to squeue for active states.
+        try:
+            proc = subprocess.run(
+                ["squeue", "-h", "-j", self.job_id, "-o", "%T"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if proc.returncode == 0:
+                state = proc.stdout.strip().splitlines()
+                if state:
+                    return state[0].strip().upper()
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        return None
 
     def detect_patterns(self) -> List[AnomalyPattern]:
         """
@@ -296,11 +371,13 @@ class ProgressiveValidator:
         # Send notification
         if NOTIFICATIONS_AVAILABLE:
             stage_name = "Stage A" if self.stage == "a" else "Stage B"
+            event_type = "anomaly_critical" if pattern.severity == "critical" else "anomaly_warning"
 
             notify(
                 title=f"Anomaly Detected: {pattern.pattern_type}",
                 message=pattern.message,
                 severity=pattern.severity,
+                event_type=event_type,
                 context={
                     "stage": stage_name,
                     "job_id": self.job_id,
@@ -344,6 +421,7 @@ class ProgressiveValidator:
         print(f"Poll interval: {self.poll_interval}s", file=sys.stderr)
         print(f"Anomaly thresholds: warning={self.anomaly_threshold_warning}, critical={self.anomaly_threshold_critical}", file=sys.stderr)
         print(f"Cancel on critical: {self.cancel_on_critical}", file=sys.stderr)
+        print(f"Min file size: {self.min_file_size_bytes} bytes", file=sys.stderr)
         print(f"Output: {output_path}", file=sys.stderr)
         print("", file=sys.stderr)
 
@@ -365,10 +443,14 @@ class ProgressiveValidator:
 
                 # Analyze each new file
                 for task_id, file_path in new_files:
-                    value = self.analyze_result(task_id, file_path)
+                    status, value, reason = self.analyze_result(task_id, file_path)
+                    if status == "pending":
+                        print(f"  Task {task_id:2d}: PENDING ({reason})", file=sys.stderr)
+                        continue
+
                     self.state.analyzed_tasks.add(task_id)
 
-                    if value is not None:
+                    if status == "valid" and value is not None:
                         print(f"  Task {task_id:2d}: {value:.4f}", file=sys.stderr)
                     else:
                         reason = self.state.anomalous_tasks.get(task_id, "unknown")
@@ -393,6 +475,18 @@ class ProgressiveValidator:
                     print("", file=sys.stderr)
                     print(f"✓ All {self.total_expected} tasks analyzed. Validation complete.", file=sys.stderr)
                     break
+
+            # Stop if monitored parent job has ended and there is nothing else to wait for.
+            parent_state = self.get_parent_job_state()
+            if parent_state in self.TERMINAL_JOB_STATES and len(self.state.analyzed_tasks) < self.total_expected:
+                print(
+                    f"Parent job {self.job_id} reached terminal state {parent_state}; "
+                    f"stopping monitor at {len(self.state.analyzed_tasks)}/{self.total_expected}.",
+                    file=sys.stderr,
+                )
+                self.state.last_update = datetime.now().isoformat()
+                self.save_state(output_path)
+                break
 
             # Wait before next poll
             time.sleep(self.poll_interval)
@@ -419,6 +513,8 @@ def main():
     # Load config from environment
     anomaly_threshold_warning = int(os.getenv("ANOMALY_THRESHOLD_WARNING", args.anomaly_threshold_warning))
     anomaly_threshold_critical = int(os.getenv("ANOMALY_THRESHOLD_CRITICAL", args.anomaly_threshold_critical))
+    lower_bound_tolerance = float(os.getenv("LOWER_BOUND_TOLERANCE", args.lower_bound_tolerance))
+    upper_bound_tolerance = float(os.getenv("UPPER_BOUND_TOLERANCE", args.upper_bound_tolerance))
     cancel_on_critical = args.cancel_on_critical or os.getenv("CANCEL_ON_CRITICAL", "0") == "1"
 
     # Create validator
@@ -430,8 +526,8 @@ def main():
         total_expected=args.total_expected,
         anomaly_threshold_warning=anomaly_threshold_warning,
         anomaly_threshold_critical=anomaly_threshold_critical,
-        lower_bound_tolerance=args.lower_bound_tolerance,
-        upper_bound_tolerance=args.upper_bound_tolerance,
+        lower_bound_tolerance=lower_bound_tolerance,
+        upper_bound_tolerance=upper_bound_tolerance,
         cancel_on_critical=cancel_on_critical
     )
 

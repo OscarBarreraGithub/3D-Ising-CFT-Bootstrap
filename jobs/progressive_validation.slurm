@@ -53,6 +53,8 @@ CANCEL_ON_CRITICAL="${CANCEL_ON_CRITICAL:-0}"
 # Anomaly thresholds
 ANOMALY_THRESHOLD_WARNING="${ANOMALY_THRESHOLD_WARNING:-10}"
 ANOMALY_THRESHOLD_CRITICAL="${ANOMALY_THRESHOLD_CRITICAL:-20}"
+LOWER_BOUND_TOLERANCE="${LOWER_BOUND_TOLERANCE:-0.01}"
+UPPER_BOUND_TOLERANCE="${UPPER_BOUND_TOLERANCE:-0.01}"
 
 echo "=== Progressive Validation Daemon ==="
 echo "Stage: ${STAGE}"
@@ -71,6 +73,8 @@ python scripts/progressive_validator.py \
     --total-expected 51 \
     --anomaly-threshold-warning "${ANOMALY_THRESHOLD_WARNING}" \
     --anomaly-threshold-critical "${ANOMALY_THRESHOLD_CRITICAL}" \
+    --lower-bound-tolerance "${LOWER_BOUND_TOLERANCE}" \
+    --upper-bound-tolerance "${UPPER_BOUND_TOLERANCE}" \
     $([ "${CANCEL_ON_CRITICAL}" = "1" ] && echo "--cancel-on-critical" || echo "") \
     --output "logs/validation_state_stage${STAGE}_${JOB_ID_TO_MONITOR}.json"
 

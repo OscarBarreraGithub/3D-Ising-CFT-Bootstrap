@@ -107,6 +107,7 @@ if [ "${NONFINITE_ROWS}" -gt 0 ]; then
             --title "Stage A Validation FAILED" \
             --message "${ERROR_MSG}" \
             --severity critical \
+            --event-type stage_a_validation \
             --context "valid_rows=${VALID_ROWS},nonfinite_rows=${NONFINITE_ROWS},pattern=nan_values" || true
     fi
 
@@ -123,6 +124,7 @@ if [ "${LOWER_ROWS}" -eq "${VALID_ROWS}" ]; then
             --title "Stage A Validation FAILED" \
             --message "${ERROR_MSG}" \
             --severity critical \
+            --event-type stage_a_validation \
             --context "valid_rows=${VALID_ROWS},pattern=all_lower_bound" || true
     fi
 
@@ -139,6 +141,7 @@ if [ "${UPPER_ROWS}" -eq "${VALID_ROWS}" ]; then
             --title "Stage A Validation FAILED" \
             --message "${ERROR_MSG}" \
             --severity critical \
+            --event-type stage_a_validation \
             --context "valid_rows=${VALID_ROWS},pattern=all_upper_bound" || true
     fi
 
@@ -153,6 +156,7 @@ if [ -f scripts/notification.py ]; then
         --title "Stage A Complete - Validation Passed" \
         --message "Stage A (upper bound on Δε) completed successfully. ${VALID_ROWS} valid results. Proceeding to Stage B submission." \
         --severity info \
+        --event-type stage_a_complete \
         --context "valid_rows=${VALID_ROWS},total_rows=${n_rows}" || true
 fi
 
@@ -176,6 +180,7 @@ if [ -f scripts/notification.py ]; then
         --title "Stage B Submitted" \
         --message "Stage B (upper bound on Δε') has been submitted. Job will compute the second constraint for each point from Stage A." \
         --severity info \
+        --event-type stage_b_submit \
         --context "job_id=${STAGE_B_JOB},array_size=${ARRAY_SIZE},estimated_runtime=28-35 hours" || true
 fi
 

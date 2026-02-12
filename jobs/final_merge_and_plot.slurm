@@ -28,6 +28,16 @@ cd "$PROJECT_DIR"
 # Load notification config if available
 [ -f .env.notifications ] && source .env.notifications
 
+# Stage B is complete if this dependency-triggered job starts.
+if [ -f scripts/notification.py ]; then
+    python scripts/notification.py \
+        --title "Stage B Complete" \
+        --message "Stage B (upper bound on Δε') completed successfully. Starting final merge and Figure 6 generation." \
+        --severity info \
+        --event-type stage_b_complete \
+        --context "final_job_id=${SLURM_JOB_ID}" || true
+fi
+
 # Step 1: Merge Stage B CSVs
 echo "--- Merging Stage B results ---"
 bash jobs/merge_stage_b.sh
@@ -53,5 +63,6 @@ if [ -f scripts/notification.py ]; then
         --title "Pipeline Complete - Figure 6 Ready!" \
         --message "The 3D-Ising-CFT-Bootstrap pipeline has completed successfully. Figure 6 has been generated and saved. Compare with reference figure el_showk_2012_fig6.png to validate results." \
         --severity info \
+        --event-type figure_complete \
         --context "output_png=figures/fig6_reproduction.png,output_pdf=figures/fig6_reproduction.pdf" || true
 fi

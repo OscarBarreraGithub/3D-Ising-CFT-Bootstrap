@@ -234,12 +234,46 @@ def format_message(title: str, message: str, context: Optional[Dict] = None, sev
     return "\n".join(lines)
 
 
+def should_notify_event(config: NotificationConfig, event_type: Optional[str], severity: str) -> bool:
+    """
+    Check whether an event should trigger notifications under current filters.
+
+    Args:
+        config: Notification configuration
+        event_type: Logical event type (e.g., stage_b_submit, anomaly_warning)
+        severity: Severity level (info, warning, critical)
+    """
+    if not event_type:
+        return True
+
+    event = event_type.strip().lower()
+    if event == "anomaly":
+        event = "anomaly_critical" if severity == "critical" else "anomaly_warning"
+
+    filter_map = {
+        "stage_a_complete": config.notify_stage_a_complete,
+        "stage_a_validation": config.notify_stage_a_validation,
+        "stage_b_submit": config.notify_stage_b_submit,
+        "stage_b_complete": config.notify_stage_b_complete,
+        "figure_complete": config.notify_figure_complete,
+        "anomaly_warning": config.notify_anomaly_warning,
+        "anomaly_critical": config.notify_anomaly_critical,
+    }
+
+    if event not in filter_map:
+        print(f"ℹ️ Unknown event_type='{event_type}', sending notification by default", file=sys.stderr)
+        return True
+
+    return filter_map[event]
+
+
 def notify(
     title: str,
     message: str,
     severity: str = "info",
     context: Optional[Dict] = None,
-    config: Optional[NotificationConfig] = None
+    config: Optional[NotificationConfig] = None,
+    event_type: Optional[str] = None,
 ) -> Dict[str, bool]:
     """
     Send notification via all configured channels.
@@ -250,6 +284,7 @@ def notify(
         severity: Severity level (info, warning, critical)
         context: Additional context (dict)
         config: Configuration (if None, loaded from environment)
+        event_type: Event type used for filter matching
 
     Returns:
         Dict with success status for each channel {"email": bool, "slack": bool}
@@ -258,6 +293,14 @@ def notify(
         config = NotificationConfig.from_env()
 
     results = {"email": False, "slack": False}
+
+    if not should_notify_event(config, event_type, severity):
+        print(
+            f"ℹ️ Notification suppressed by filter "
+            f"(event_type={event_type}, severity={severity})",
+            file=sys.stderr,
+        )
+        return results
 
     # Format message
     subject = f"[{severity.upper()}] {title}"
@@ -290,6 +333,20 @@ def main():
     parser.add_argument("--message", help="Notification message")
     parser.add_argument("--severity", choices=["info", "warning", "critical"], default="info")
     parser.add_argument("--context", help="Context as key=value,key2=value2")
+    parser.add_argument(
+        "--event-type",
+        choices=[
+            "stage_a_complete",
+            "stage_a_validation",
+            "stage_b_submit",
+            "stage_b_complete",
+            "figure_complete",
+            "anomaly_warning",
+            "anomaly_critical",
+            "anomaly",
+        ],
+        help="Logical event type used for notification filters",
+    )
     parser.add_argument("--test-email", metavar="EMAIL", help="Test email delivery")
     parser.add_argument("--test-slack", metavar="WEBHOOK", help="Test Slack delivery")
     parser.add_argument("--test", action="store_true", help="Test all configured channels")
@@ -354,7 +411,8 @@ def main():
             title=args.title,
             message=args.message,
             severity=args.severity,
-            context=context
+            context=context,
+            event_type=args.event_type,
         )
 
         sys.exit(0 if any(results.values()) else 1)
