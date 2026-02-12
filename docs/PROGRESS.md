@@ -1009,6 +1009,35 @@ tests/
 - Review checklist: `docs/SAPPHIRE_MIGRATION_CHECKLIST.md`
 - Archived logs: `logs/archive/2026-02-overnight-timeout/`, `logs/archive/2026-02-10-stage-a-timeout/`
 
+**Verification (2026-02-12):**
+```bash
+$ bash jobs/verify_partition_migration.sh
+Checking partition configuration in all .slurm files:
+
+✓ consolidate_cache.slurm: sapphire
+✓ diagnose_lp.slurm: sapphire
+✓ final_merge_and_plot.slurm: sapphire
+✓ merge_stage_a_and_submit_b.slurm: sapphire
+✓ merge_stage_a_job.slurm: sapphire
+✓ precompute_array.slurm: sapphire
+✓ precompute.slurm: sapphire
+✓ stage_a_extended.slurm: sapphire
+✓ stage_a_pilot_sdpb.slurm: sapphire
+✓ stage_a_sdpb.slurm: sapphire
+✓ stage_a.slurm: sapphire
+✓ stage_b_extended.slurm: sapphire
+✓ stage_b_sdpb.slurm: sapphire
+✓ stage_b.slurm: sapphire
+✓ stage_b_smoke_sdpb.slurm: sapphire
+✓ test_error_detection.slurm: sapphire
+✓ test_gates.slurm: sapphire
+✓ test_sufficient_memory.slurm: sapphire
+
+✓ All 18 .slurm files use sapphire partition
+```
+
+**Migration Status:** ✅ Complete - All scripts verified, documentation updated, ready for external review
+
 ---
 
 ### Overnight Run Timeline (Failures Leading to Migration)
