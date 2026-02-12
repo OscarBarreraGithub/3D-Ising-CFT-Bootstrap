@@ -51,6 +51,11 @@ figures/
 *.log
 tools/*.sif
 
+# Monitoring configuration (user-specific)
+.env.notifications
+.env.validation
+logs/validation_state*.json
+
 # Claude Code local settings
 .claude/settings.local.json
 
