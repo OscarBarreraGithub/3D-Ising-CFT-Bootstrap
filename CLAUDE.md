@@ -42,7 +42,30 @@ See `docs/LP_CONDITIONING_BUG.md` for the full diagnosis and fix.
 - Cache block derivatives to `data/cached_blocks/`
 - Normalization: Dolan-Osborn convention (critical for matching paper results)
 
-## Pipeline Status (as of 2026-02-11)
+## Environment
+
+**Cluster:** Harvard FAS RC (SLURM)
+- **Account:** `randall_lab`
+- **Partition:** **`sapphire`** (production runs)
+- **SDPB:** Version 3.1.0 via Singularity container (`tools/sdpb-3.1.0.sif`)
+- **Conda:** `source ~/.bashrc && conda activate ising_bootstrap` (required in all SLURM scripts)
+
+**Production Resource Configuration:**
+- Stage A/B: `--mem=128G --cpus-per-task=16 --time=36:00:00`
+- SDPB timeout: 18000s (5 hours, configurable via `SDPB_TIMEOUT` env var)
+- Partition: sapphire (7-day walltime limit, 990GB RAM/node, 112 cores/node, MPI-optimized)
+
+**Why Sapphire:**
+- Stage A/B tasks require 28-35 hours to complete (not 12h)
+- Shared partition 12h limit insufficient → TIMEOUT
+- Sapphire 7-day limit accommodates long SDPB jobs comfortably
+- See `docs/OVERNIGHT_TIMEOUT_ANALYSIS_2026-02-12.md` for full analysis
+
+**When to Use Shared vs Sapphire:**
+- Sapphire: Production (n_max=10, full 51-task arrays)
+- Shared: Development/testing (n_max≤5, quick tests, debugging)
+
+## Pipeline Status (as of 2026-02-12)
 
 ### Strict SDPB Semantics Merged ✓
 
@@ -58,32 +81,46 @@ See `docs/LP_CONDITIONING_BUG.md` for the full diagnosis and fix.
 
 **All tests passing:** 17 SDPB + 28 Stage A + 30 Stage B = 75/75 ✓
 
-### Current Blocker: SDPB Timeout
+### Sapphire Partition Migration ✓
 
-**Problem:** SDPB needs >10 minutes per solve but times out at 10 minutes (600s)
-- Constraint matrix: 520,476 operators → 470,476 SDP blocks
-- Memory: 128G sufficient (70GB used, no OOM)
-- No MPI errors, no crashes
-- Just too slow for current timeout
+**Status:** RESOLVED (2026-02-12) - Migrated from `shared` to `sapphire` partition
 
-**Solution:** Find correct timeout via runtime envelope characterization
+**Problem (Resolved):** SDPB bisection requires 28-35 hours per task
+- Each SDPB solve: 2-2.2 hours (measured on 16 cores)
+- Bisection iterations: 12-16 needed per Δσ point
+- Shared partition walltime limit: 12 hours → Insufficient by 2-3×
+- Overnight jobs timed out (Jobs 59973738, 59973739) after 8 hours
+
+**Solution:** Sapphire partition migration
+- All 18 `.slurm` scripts updated to `--partition=sapphire`
+- Resources: 16 cores, 128GB, 36h walltime (was 8 cores, 128GB, 12h)
+- Expected pipeline runtime: ~60 hours (2.5 days) to Figure 6
+
+**Documentation:**
+- Failure analysis: `docs/OVERNIGHT_TIMEOUT_ANALYSIS_2026-02-12.md`
+- Review checklist: `docs/SAPPHIRE_MIGRATION_CHECKLIST.md`
+- Archived logs: `logs/archive/2026-02-overnight-timeout/`
 
 ### Next Steps
 
-**Phase 1: Single-point characterization** (Δσ=0.518)
+**Phase 1: Single-point validation on sapphire**
 ```bash
-# Try increasing timeouts until one succeeds
-bash jobs/submit_stage_a_runtime_envelope.sh             # 1800s, 8 cores, 128G
-TIMEOUT=3600 bash jobs/submit_stage_a_runtime_envelope.sh  # If timed out
-TIMEOUT=3600 CPUS=16 MEM=160G bash ...                    # More resources
+sbatch --partition=sapphire --mem=128G --cpus-per-task=16 --time=36:00:00 \
+  --export=ALL,SDPB_TIMEOUT=18000,SIGMA=0.518,OUTPUT_CSV=data/sapphire_test.csv \
+  jobs/test_sufficient_memory.slurm
 ```
 
-**Success criterion:** `data/test_sufficient_memory.csv` shows `0.518000,1.41XXXX` (not NaN, not 2.5)
+**Success criterion:**
+- CSV shows `0.518,1.41XXXX` (not NaN)
+- Job completes in 24-32 hours (not TIMEOUT)
+- Log shows 12-16 bisection iterations
 
-**Phase 2: Pilot + Full Array**
-Once single-point works, use those parameters for the full pipeline.
+**Phase 2: Full production pipeline** (after single-point success)
+```bash
+sbatch --array=0-50 jobs/stage_a_sdpb.slurm  # 51 tasks on sapphire
+```
 
-**See:** `HANDOFF_2026-02-11_STRICT_SEMANTICS_MERGED.md` for complete workflow
+**Expected timeline:** Stage A (30h) + Merge (5min) + Stage B (30h) + Plot (5min) = ~60 hours
 
 ### Job Chain (Reference)
 

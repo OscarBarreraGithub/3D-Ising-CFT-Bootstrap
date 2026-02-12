@@ -971,3 +971,96 @@ tests/
    - At Delta_sigma ~ 0.5182: Delta_epsilon_max ~ 1.41
    - At Delta_sigma ~ 0.5182: Delta_epsilon'_max ~ 3.84
    - Sharp spike in Delta_epsilon' bound below Ising Delta_sigma
+
+---
+
+## Partition Migration (2026-02-12)
+
+### Sapphire Partition Adoption
+
+**Status:** Migrated from `shared` to `sapphire` partition for all production runs (2026-02-12)
+
+**Reason:** SDPB timeout analysis revealed that each Stage A task requires **26-35 hours** to complete:
+- Each SDPB solve: 2-2.2 hours (measured on 16 cores)
+- Bisection iterations needed: 12-16 per Δσ point
+- Total time per task: 2h × 14 iterations ≈ 28 hours
+- **Shared partition limit: 12 hours** → Insufficient by 2-3×
+
+**Files Changed:** All 18 `.slurm` job scripts now use `#SBATCH --partition=sapphire`
+
+**Resource Configuration:**
+- Stage A/B scripts: 16 cores, 128GB, 36h walltime (was 8 cores, 128GB, 12h)
+- SDPB timeout: 18000s (5 hours, configurable via `SDPB_TIMEOUT`)
+- Supporting scripts (merge, precompute): sapphire partition, original resources
+
+**Expected Performance:**
+- Stage A runtime: 28-35 hours per task (all 51 tasks run in parallel on 9 nodes)
+- Stage B runtime: 28-35 hours per task
+- Total pipeline: ~60 hours (2.5 days) from start to Figure 6
+
+**Sapphire Advantages:**
+- 7-day walltime limit (vs 12 hours on shared) - Accommodates 28-35h jobs comfortably
+- 990GB RAM/node (vs 184GB) - Can fit 6 jobs/node instead of 1 → Only 9 nodes needed for 51 tasks
+- 112 cores/node (vs 48) - Better resource utilization
+- InfiniBand MPI fabric - Optimized for SDPB's MPI parallelization
+
+**Documentation:**
+- Full analysis: `docs/OVERNIGHT_TIMEOUT_ANALYSIS_2026-02-12.md`
+- Review checklist: `docs/SAPPHIRE_MIGRATION_CHECKLIST.md`
+- Archived logs: `logs/archive/2026-02-overnight-timeout/`, `logs/archive/2026-02-10-stage-a-timeout/`
+
+---
+
+### Overnight Run Timeline (Failures Leading to Migration)
+
+**2026-02-11 00:46** - First overnight run (Jobs 59843729, 59844257, 59844715, 59845395):
+- **Result:** All TIMEOUT after 6-12 **minutes** (not hours)
+- **Cause:** Walltime parsing bug (IFS=':' delimiter conflicted with HH:MM:SS format)
+- **Fix:** Changed delimiter from ':' to '|' in overnight_full_pipeline.sh
+- **Documented:** `BUGFIX_2026-02-11_WALLTIME_PARSING.md`
+
+**2026-02-11 15:04** - Second attempt (Job 59936292):
+- Configuration: 8 cores, 128GB, 6h walltime, 1800s SDPB timeout
+- **Result:** Completed but produced NaN (not valid)
+- **Cause:** 1800s (30 min) SDPB timeout too short for bisection convergence
+- **Finding:** Need hours, not minutes, for SDPB timeout
+
+**2026-02-11 18:57** - Extended timeout test (Jobs 59973738, 59973739):
+- Job 59973738: 8 cores, 128GB, 8h walltime, 18000s (5h) SDPB timeout
+  - **Result:** TIMEOUT after 8h SLURM walltime limit
+  - **Progress:** 2 bisection iterations completed
+  - **Log:** `logs/test_sufficient_memory_59973738.log` (archived)
+
+- Job 59973739: 16 cores, 160GB, 8h walltime, 18000s (5h) SDPB timeout
+  - **Result:** TIMEOUT after 8h SLURM walltime limit
+  - **Progress:** 4 bisection iterations completed (470K → 495K → 508K → 514K blocks)
+  - **Log:** `logs/test_sufficient_memory_59973739.log` (archived)
+
+**Key Performance Metrics:**
+| Metric | 8 cores | 16 cores |
+|--------|---------|----------|
+| pmp2sdp time | ~302-350s | ~303-348s |
+| SDPB solve time | ~2.2h | ~2.0h |
+| Iterations in 8h | 2-3 | 3-4 |
+| Speedup with 2× cores | - | 1.1× (only 10% faster) |
+
+**Conclusion:** Both configurations hit 8-hour walltime limit before completing bisection (need 12-16 iterations). SDPB solve time (~2h) doesn't scale well with cores. **Solution: Longer walltime (sapphire partition) required.**
+
+**Resolution:** Migrate to sapphire partition (2026-02-12)
+
+---
+
+### Strict Semantics Integration (2026-02-11)
+
+**Status:** Merged `codex/strict-failfast-stageb-snap-eps` branch to main (2026-02-11)
+
+**Key Changes:**
+- **Fail-fast:** ANY solver failure → NaN for that point (no retries)
+- **SDPB strict:** Only explicit "feasible" or "infeasible" trusted; "inconclusive" = failure
+- **Stage B anchoring:** Snaps Stage A Δε to scalar grid with tolerance check
+- **Merge gates:** Validates Stage A data before launching Stage B
+- **Timeout configurable:** `SDPB_TIMEOUT` env var exposed end-to-end
+
+**Test Suite:** All 75 tests passing (17 SDPB + 28 Stage A + 30 Stage B)
+
+**Documented:** `HANDOFF_2026-02-11_STRICT_SEMANTICS_MERGED.md`
