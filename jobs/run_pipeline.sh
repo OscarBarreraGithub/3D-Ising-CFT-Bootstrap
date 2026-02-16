@@ -3,7 +3,10 @@
 # Full pipeline launcher: Stage A -> Stage B -> Plot
 #
 # Optional legacy gates can run before Stage A when RUN_TEST_GATES=1.
-# Each step only runs if the previous succeeded (--dependency=afterok).
+# Each step only runs after the previous finishes (--dependency=afterany).
+# We use afterany (not afterok) so the merge/validation step always runs,
+# even if some array tasks time out. The merge script has its own validation
+# gates that handle partial results gracefully.
 #
 # Usage:
 #   cd /n/holylabs/schwartz_lab/Lab/obarrera/3D-Ising-CFT-Bootstrap
@@ -105,7 +108,7 @@ fi
 # --- Step 3: Merge Stage A + Submit Stage B + Final Plot ---
 echo "--- Step 3: Submitting merge + Stage B launcher (depends on Stage A) ---"
 MERGE_JOB=$(sbatch --parsable \
-    --dependency=afterok:${STAGE_A_JOB} \
+    --dependency=afterany:${STAGE_A_JOB} \
     --export=ALL,SDPB_TIMEOUT="${SDPB_TIMEOUT}",STAGE_B_TOLERANCE="${STAGE_B_TOLERANCE}",EPS_SNAP_TOLERANCE="${EPS_SNAP_TOLERANCE}",STAGE_B_ARRAY="${STAGE_B_ARRAY}",STAGE_B_CPUS="${STAGE_B_CPUS}",STAGE_B_MEM="${STAGE_B_MEM}",STAGE_B_TIME="${STAGE_B_TIME}" \
     jobs/merge_stage_a_and_submit_b.slurm)
 echo "  Merge+submit job: ${MERGE_JOB}"

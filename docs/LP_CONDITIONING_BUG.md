@@ -1,12 +1,17 @@
 # LP Conditioning Bug — Stage A Returns All 0.5
 
 **Date:** 2026-02-06
-**Status:** FIXED (2026-02-09) — replaced scipy/HiGHS with SDPB arbitrary-precision solver
+**Status:** PARTIALLY FIXED (2026-02-09), REOPENED (2026-02-16)
 
-**Fix:** Integrated SDPB (arXiv:1502.02033) via Singularity container as the LP backend.
-SDPB uses 1024-bit internal precision, completely sidestepping the float64 conditioning issue.
-See `src/ising_bootstrap/lp/sdpb.py` and the `--backend sdpb` CLI option.
-Stage A job 59675873 submitted with SDPB backend — validation pending.
+**2026-02-09:** Integrated SDPB (arXiv:1502.02033) via Singularity container as the LP backend.
+SDPB uses 1024-bit internal precision internally.
+
+**2026-02-16:** SDPB alone is NOT sufficient. The constraint matrix is still built in float64
+and written to PMP JSON with only 17 significant digits. SDPB solves the corrupted problem
+with extreme precision, finding spurious feasible solutions at every gap. All completed
+Stage A tasks returned Delta_eps = 0.5 (wrong).
+
+**See:** `docs/STAGEA_ROOT_CAUSE_2026-02-16.md` for the full updated diagnosis and fix plan.
 
 ## Summary
 

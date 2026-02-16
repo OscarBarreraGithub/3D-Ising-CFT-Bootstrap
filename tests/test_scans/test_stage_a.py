@@ -230,6 +230,123 @@ class TestFailureHandling:
                 config,
             )
 
+    def test_invalid_bracket_lo_excluded_raises(self, monkeypatch):
+        """Bracket guard should abort if eps_lo is excluded."""
+        import ising_bootstrap.scans.stage_a as stage_a_module
+
+        def _always_excluded(*args, **kwargs):
+            return FeasibilityResult(
+                excluded=True,
+                status="simulated excluded",
+                lp_status=0,
+                success=True,
+            )
+
+        monkeypatch.setattr(stage_a_module, "check_feasibility", _always_excluded)
+
+        config = ScanConfig(
+            tolerance=0.1,
+            max_iter=3,
+            eps_lo=0.5,
+            eps_hi=1.5,
+            validate_bracket=True,
+        )
+
+        A = np.array([[1.0], [1.0]], dtype=np.float64)
+        f_id = np.array([1.0], dtype=np.float64)
+        scalar_mask = np.array([True, False], dtype=bool)
+        scalar_deltas = np.array([1.0, 3.0], dtype=np.float64)
+        spinning_mask = ~scalar_mask
+
+        with pytest.raises(RuntimeError, match="lower bound gap=0.500000 is excluded"):
+            find_eps_bound(
+                0.518,
+                A,
+                f_id,
+                scalar_mask,
+                scalar_deltas,
+                spinning_mask,
+                config,
+            )
+
+    def test_invalid_bracket_hi_allowed_raises(self, monkeypatch):
+        """Bracket guard should abort if eps_hi is still allowed."""
+        import ising_bootstrap.scans.stage_a as stage_a_module
+
+        def _always_allowed(*args, **kwargs):
+            return FeasibilityResult(
+                excluded=False,
+                status="simulated allowed",
+                lp_status=2,
+                success=True,
+            )
+
+        monkeypatch.setattr(stage_a_module, "check_feasibility", _always_allowed)
+
+        config = ScanConfig(
+            tolerance=0.1,
+            max_iter=3,
+            eps_lo=0.5,
+            eps_hi=1.5,
+            validate_bracket=True,
+        )
+
+        A = np.array([[1.0], [1.0]], dtype=np.float64)
+        f_id = np.array([1.0], dtype=np.float64)
+        scalar_mask = np.array([True, False], dtype=bool)
+        scalar_deltas = np.array([1.0, 3.0], dtype=np.float64)
+        spinning_mask = ~scalar_mask
+
+        with pytest.raises(RuntimeError, match="upper bound gap=1.500000 is still allowed"):
+            find_eps_bound(
+                0.518,
+                A,
+                f_id,
+                scalar_mask,
+                scalar_deltas,
+                spinning_mask,
+                config,
+            )
+
+    def test_disable_bracket_validation_keeps_old_behavior(self, monkeypatch):
+        """With validate_bracket=False, old behavior is preserved."""
+        import ising_bootstrap.scans.stage_a as stage_a_module
+
+        def _always_excluded(*args, **kwargs):
+            return FeasibilityResult(
+                excluded=True,
+                status="simulated excluded",
+                lp_status=0,
+                success=True,
+            )
+
+        monkeypatch.setattr(stage_a_module, "check_feasibility", _always_excluded)
+
+        config = ScanConfig(
+            tolerance=0.01,
+            max_iter=8,
+            eps_lo=0.5,
+            eps_hi=1.5,
+            validate_bracket=False,
+        )
+
+        A = np.array([[1.0], [1.0]], dtype=np.float64)
+        f_id = np.array([1.0], dtype=np.float64)
+        scalar_mask = np.array([True, False], dtype=bool)
+        scalar_deltas = np.array([1.0, 3.0], dtype=np.float64)
+        spinning_mask = ~scalar_mask
+
+        eps_max, _ = find_eps_bound(
+            0.518,
+            A,
+            f_id,
+            scalar_mask,
+            scalar_deltas,
+            spinning_mask,
+            config,
+        )
+        assert eps_max < 0.51
+
 
 # ============================================================================
 # Tests for CSV I/O
@@ -390,6 +507,7 @@ class TestStageAIntegration:
         config = ScanConfig(
             tolerance=0.01, max_iter=20, n_max=2,
             tables=tables,
+            validate_bracket=False,  # coarse toy setup may violate bracket
         )
 
         A, f_id, scalar_mask, scalar_deltas, spinning_mask = \
@@ -421,6 +539,7 @@ class TestStageAIntegration:
         config = ScanConfig(
             tolerance=0.01, max_iter=30, n_max=2,
             tables=tables,
+            validate_bracket=False,  # coarse toy setup may violate bracket
         )
 
         A, f_id, scalar_mask, scalar_deltas, spinning_mask = \
@@ -452,6 +571,7 @@ class TestStageAIntegration:
             n_max=2,
             tables=[COARSE_T1, COARSE_T2],
             output=output_path,
+            validate_bracket=False,  # coarse toy setup may violate bracket
         )
 
         results = run_scan(config)

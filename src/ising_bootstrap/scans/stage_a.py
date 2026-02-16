@@ -85,6 +85,7 @@ class ScanConfig:
     sdpb_precision: int = 1024
     sdpb_cores: int = 4
     sdpb_timeout: int = 600
+    validate_bracket: bool = True
     workers: int = 1
     shard_id: Optional[int] = None
     num_shards: Optional[int] = None
@@ -294,7 +295,32 @@ def find_eps_bound(
                 f"Solver failed while testing gap={gap:.6f} at Δσ={delta_sigma:.6f}. "
                 f"Failure: {result.status}"
             )
+        if config.verbose:
+            verdict = "EXCLUDED" if result.excluded else "ALLOWED"
+            print(
+                f"    gap={gap:.6f} rows={A_sub.shape[0]} -> {verdict} "
+                f"({result.status})"
+            )
         return result.excluded
+
+    # Validate bisection bracket before wasting hours of compute
+    if config.validate_bracket:
+        lo_excluded = is_excluded(config.eps_lo)
+        hi_excluded = is_excluded(config.eps_hi)
+
+        if lo_excluded:
+            raise RuntimeError(
+                f"Invalid bisection bracket at Δσ={delta_sigma:.6f}: "
+                f"lower bound gap={config.eps_lo:.6f} is excluded. "
+                "This indicates a solver or precision issue and would force "
+                "a misleading Δε_max=eps_lo result."
+            )
+        if not hi_excluded:
+            raise RuntimeError(
+                f"Invalid bisection bracket at Δσ={delta_sigma:.6f}: "
+                f"upper bound gap={config.eps_hi:.6f} is still allowed. "
+                "Increase eps_hi before running Stage A."
+            )
 
     return binary_search_eps(
         is_excluded,
@@ -643,6 +669,11 @@ def main():
         "--sdpb-timeout", type=int, default=600,
         help="SDPB timeout in seconds (default: 600)"
     )
+    parser.add_argument(
+        "--no-validate-bracket", action="store_true",
+        help="Skip validating that gap=eps_lo is allowed and gap=eps_hi is "
+             "excluded before binary search"
+    )
 
     args = parser.parse_args()
 
@@ -664,6 +695,7 @@ def main():
         sdpb_precision=args.sdpb_precision,
         sdpb_cores=args.sdpb_cores,
         sdpb_timeout=args.sdpb_timeout,
+        validate_bracket=not args.no_validate_bracket,
     )
 
     if config.precompute_only:

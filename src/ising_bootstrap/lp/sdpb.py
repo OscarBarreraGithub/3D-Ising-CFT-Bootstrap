@@ -350,6 +350,12 @@ def check_feasibility_sdpb(
             print(f"  Running sdpb ({config.n_cores} cores, "
                   f"precision={config.precision}) ...")
         output = run_sdpb_solver(sdp_dir, out_dir, config)
+        if config.verbose:
+            reason = output.get("terminateReason", "<missing>")
+            duality_gap = output.get("dualityGap")
+            print(f"  SDPB terminateReason: {reason}")
+            if duality_gap is not None:
+                print(f"  SDPB dualityGap: {duality_gap}")
 
         # 4. Interpret result
         return _interpret_sdpb_output(output)
@@ -364,8 +370,19 @@ def check_feasibility_sdpb(
     except (RuntimeError, FileNotFoundError) as e:
         # Classify failure type for diagnostics
         error_msg = str(e)
-        is_oom = "signal 9" in error_msg.lower() or "killed" in error_msg.lower()
-        is_mpi = "mpirun" in error_msg.lower() or "slots" in error_msg.lower()
+        lower_msg = error_msg.lower()
+        is_oom = (
+            "out of memory" in lower_msg
+            or "oom" in lower_msg
+            or "signal 9" in lower_msg
+        )
+        is_mpi = (
+            "mpi_init" in lower_msg
+            or "mpirun" in lower_msg
+            or "open mpi" in lower_msg
+            or "slots" in lower_msg
+            or "pmi" in lower_msg
+        )
         failure_type = "OOM kill" if is_oom else "MPI error" if is_mpi else "SDPB error"
 
         return FeasibilityResult(
